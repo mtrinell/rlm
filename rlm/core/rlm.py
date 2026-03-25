@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -37,6 +38,8 @@ from rlm.utils.prompts import (
 )
 from rlm.utils.rlm_utils import filter_sensitive_keys
 from rlm.utils.token_utils import count_tokens, get_context_limit
+
+_logger = logging.getLogger(__name__)
 
 
 class RLM:
@@ -303,6 +306,13 @@ class RLM:
         if self.logger:
             self.logger.clear_iterations()
 
+        _logger.info(
+            "RLM completion starting (depth=%d, max_iterations=%d, max_depth=%d)",
+            self.depth,
+            self.max_iterations,
+            self.max_depth,
+        )
+
         with self._spawn_completion_context(prompt) as (lm_handler, environment):
             message_history = self._setup_prompt(prompt)
 
@@ -342,11 +352,30 @@ class RLM:
                         build_user_prompt(root_prompt, i, context_count, history_count)
                     ]
 
+                    _logger.info("Iteration %d/%d starting\u2026", i + 1, self.max_iterations)
+                    if self.on_iteration_start:
+                        try:
+                            self.on_iteration_start(self.depth, i + 1)
+                        except Exception:
+                            pass
+
                     iteration: RLMIteration = self._completion_turn(
                         prompt=current_prompt,
                         lm_handler=lm_handler,
                         environment=environment,
                     )
+
+                    _logger.info(
+                        "Iteration %d/%d complete in %.2fs",
+                        i + 1,
+                        self.max_iterations,
+                        iteration.iteration_time,
+                    )
+                    if self.on_iteration_complete:
+                        try:
+                            self.on_iteration_complete(self.depth, i + 1, iteration.iteration_time)
+                        except Exception:
+                            pass
 
                     # Check error/budget/token limits after each iteration
                     self._check_iteration_limits(iteration, i, lm_handler)
@@ -598,11 +627,19 @@ class RLM:
         and code execution + tool execution.
         """
         iter_start = time.perf_counter()
+        _logger.info("Calling LLM\u2026")
         response = lm_handler.completion(prompt)
+        llm_time = time.perf_counter() - iter_start
         code_block_strs = find_code_blocks(response)
+        _logger.info(
+            "LLM responded in %.2fs \u2014 %d code block(s) to execute",
+            llm_time,
+            len(code_block_strs),
+        )
         code_blocks = []
 
-        for code_block_str in code_block_strs:
+        for idx, code_block_str in enumerate(code_block_strs, 1):
+            _logger.debug("Executing code block %d/%d", idx, len(code_block_strs))
             code_result: REPLResult = environment.execute_code(code_block_str)
             code_blocks.append(CodeBlock(code=code_block_str, result=code_result))
 
