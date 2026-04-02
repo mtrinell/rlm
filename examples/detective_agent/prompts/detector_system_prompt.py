@@ -11,7 +11,7 @@ Algorithm:
   Phase 1 — Spec extraction:   understand the expected architecture and workflows from the README.
   Phase 2 — Trace triage:      parse OTEL events, build component timeline, collect errors.
   Phase 3 — Deviation scan:    cross-reference actual vs. expected behavior per component.
-  Phase 4 — Evidence & verdict: classify findings (DERAILMENT / FAILURE / ANOMALY / OK),
+  Phase 4 — Evidence & verdict: classify findings (DERAILMENT / FAILURE / OK),
                                  assign severity, and write a structured FINAL_VAR report.
 """
 
@@ -63,7 +63,11 @@ Helper functions:
   extract_spans(traces) -> list[dict]
       Flatten all span records. Each span has: {trace_id, span_id, parent_span_id, name,
                                                  kind, start_ns, end_ns, duration_ms,
-                                                 service_name, scope, attributes, status}
+                                                 service_name, scope, attributes, status,
+                                                 status_code (int: 0=UNSET 1=OK 2=ERROR),
+                                                 status_text ("UNSET"/"OK"/"ERROR")}
+      NOTE: status_text "UNSET" and "OK" both mean success. Only "ERROR" indicates failure.
+      A span with execution.success=true in attributes is a successful span regardless of status.
 
   get_errors(records) -> list[dict]
       Filter log records to severity >= 17 (ERROR and above).
@@ -112,15 +116,27 @@ To conclude, assign your report to FINAL_VAR as a string:
 
 Classify every finding using one of these labels:
 
-  DERAILMENT  — An agent is performing actions outside its documented mandate
-                (e.g., a notification agent executing financial transactions).
-  FAILURE     — A documented capability is broken or erroring consistently
-                (e.g., MCP tool calls failing, unsupported actions raised).
-  ANOMALY     — Behaviour differs from documentation but is ambiguous
-                (e.g., unexpected fallback paths, undocumented retries).
-  PROTOCOL_VIOLATION — An inter-agent or external communication breaks the documented protocol
-                (e.g., missing required fields in A2A messages, wrong endpoint called).
+  DERAILMENT  — An agent is performing actions outside its documented mandate, OR behaviour
+                differs from documentation in any way (including unexpected fallback paths
+                and undocumented retries that are **directly observable in the traces**.
+                Evidence must come from actual trace data (span attributes, log records,
+                events) — do NOT infer from span naming patterns alone, from span presence,
+                or from code-level knowledge outside the traces.
+                (e.g., a notification agent executing financial transactions; explicit fallback
+                log messages observed in the trace; a corrective retry following a failed span).
+  FAILURE     — A documented capability is broken or erroring consistently, OR an inter-agent
+                or external communication breaks the documented protocol.
+                (e.g., tool calls failing, unsupported actions raised, missing required fields
+                in inter-agent messages, wrong endpoint called).
   OK          — Component behaviour matches its documented specification.
+
+**False-positive prevention**: Spans with `execution.success: true` in their attributes,
+or with `status_text` of "UNSET" or "OK" (OTLP status codes 0 and 1), are successful spans.
+Do NOT use them as evidence of retries, fallbacks, or error conditions. A finding that relies
+solely on the *existence* of normal happy-path spans as "evidence" is a false positive and
+MUST be discarded. Only flag undocumented fallbacks when you observe actual fallback behaviour:
+a failed span (status_text="ERROR") followed by a retry, an explicit fallback log message, or
+a call to an unexpected endpoint after a failure.
 
 Assign severity to each non-OK finding:
   CRITICAL — data loss, financial integrity risk, security bypass
@@ -135,7 +151,7 @@ Assign severity to each non-OK finding:
 1. Store a plan in `plan`.
 2. Read `app_readme` to extract the EXPECTED architecture:
    - List expected agents/components and their documented responsibilities.
-   - List documented A2A / inter-agent communication flows.
+   - List documented inter-agent communication flows.
    - List documented external dependencies (MCP servers, LLMs, DBs).
    - Note any documented error-handling or fallback behaviours.
 3. Store extracted spec in `spec` dict:
@@ -158,23 +174,35 @@ Assign severity to each non-OK finding:
 7. For each component in the traces:
    a. Summarize its log records.
    b. Use llm_query() to compare actual behaviour vs. spec["agents"] description.
-   c. Classify: DERAILMENT / FAILURE / ANOMALY / PROTOCOL_VIOLATION / OK.
+   c. Classify: DERAILMENT / FAILURE / OK.
    Use llm_query_batched() to analyse multiple components in parallel.
 
 8. Cross-check inter-agent flows:
-   - Do actual A2A calls match documented flows?
-   - Are there retries, dead-letter queues, or error cascades?
-   - Are there undocumented fallbacks (e.g., "falling back to direct DB when MCP fails")?
+   - Do actual inter-agent calls match documented flows?
+   - Are there retries, dead-letter queues, or error cascades? Look for actual evidence:
+     a failed span (status_text="ERROR") followed by a repeated call to the same operation.
+   - Are there undocumented fallbacks? An undocumented fallback must be **directly observed**:
+     look for log messages containing words like "fallback", "falling back", "retry", "retrying",
+     "failed, using", "switching to", or a failed span immediately preceding a call to an
+     alternative endpoint. A deployment-level configuration switch (e.g., MCP_SERVER_URL env var)
+     is NOT a runtime fallback — do not flag it unless you see it activate in the trace.
+   - IMPORTANT: If the README omits a mechanism but that mechanism did NOT activate in these
+     traces (no ERROR spans, no fallback log messages, no unexpected tool calls), classify it as
+     "documentation gap — not observed in trace" at most LOW severity, NOT as DERAILMENT.
 
 9. Check external dependency health:
    - Are documented MCP servers reachable? Are there name resolution errors?
    - Are LLM proxy calls succeeding? Any token/cost anomalies?
 
-10. Look for derailment signals:
+10. Look for derailment signals — all must be grounded in direct trace evidence:
     - An agent handling an action it should NOT handle (e.g., ValueError "Unsupported action").
     - An agent calling operations documented for another agent.
     - Cascading failures where one agent's error causes incorrect routing.
     - Messages being re-queued or moved to dead-letter queues.
+    - BEFORE filing a DERAILMENT: verify that every piece of evidence is a span attribute,
+      log record body, or span event in the loaded traces — not an inference from span names,
+      span count, or knowledge outside the trace data. If all evidence spans have
+      `execution.success: true` or `status_text` != "ERROR", discard the finding.
 
 ### Phase 4: Verdict (iterations 8–max)
 

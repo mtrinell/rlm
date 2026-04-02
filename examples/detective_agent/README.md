@@ -1,115 +1,114 @@
-# RLM Engine
+# Detective Agent
 
-Root Cause Analysis engine using Recursive Language Models (RLMs).
+Investigation engine using Recursive Language Models (RLMs). A single LM self-programs its investigation strategy through code execution in a REPL environment.
 
-## Overview
+## Use Cases
 
-Reimplementation of the a3po RCA engine using [Recursive Language Models](https://github.com/alexzhang13/rlm). A single LM self-programs its investigation strategy through code execution in a REPL environment, replacing the multi-agent LangGraph architecture.
+### 1. Behavioral Deviation Detection (default)
 
-| Aspect | Original (LangGraph) | RLM Engine |
-|--------|---------------------|------------|
-| Architecture | 15 specialized agents in state machine | Single LM with REPL environment |
-| Control Flow | Fixed graph with explicit routing | LM decides strategy dynamically |
-| Context Handling | Passed in prompts (token limited) | Loaded in REPL (unlimited) |
+Given the README/documentation of a multi-agent application and its actual OpenTelemetry traces, the agent detects whether the app is behaving as documented — flagging derailments, failures, protocol violations, and anomalies.
 
-## Running the RLM Engine
+**Inputs:**
+- `APP_README_PATH` — README or documentation of the app under test
+- `TRACES_PATH` — OpenTelemetry JSONL traces from a live run
 
-From the **a3po-engine** project root:
+**Output:** A `BEHAVIORAL COMPLIANCE REPORT` with per-component findings classified as `DERAILED / DEGRADED / ANOMALOUS / HEALTHY`.
+
+**Example dataset:** `examples/banking_app/` — SentinelBank AI, a multi-agent banking system.
+
+### 2. Root Cause Analysis
+
+Given a tarball of infrastructure logs (network, Kubernetes, syslog, etc.) and a problem statement, the agent identifies the root cause of an incident.
+
+**Inputs:**
+- `TEST_DATASET` — path to a `.tar` / `.tar.gz` log archive
+- `PROBLEM_STATEMENT` — description of the observed failure
+
+**Output:** A `ROOT CAUSE ANALYSIS REPORT` with evidence, causal chain, and confidence rating.
+
+## Running
 
 ```bash
-# Using uv (recommended)
-uv run python -m src.rlm.main
+# From the detective_agent directory
+uv run python -m examples.detective_agent.main
 
-# Or with an activated virtualenv
-source .venv/bin/activate
-python -m src.rlm.main
-```
-
-### Environment Variable Overrides
-
-All settings in `.env` can be overridden inline:
-
-```bash
-MAX_ITERATIONS=30 TEST_DATASET=/absolute/path/to/dataset.tar uv run python -m src.rlm.main
+# With environment variable overrides
+APP_README_PATH=examples/banking_app/README.md \
+TRACES_PATH=examples/banking_app/otel-traces.jsonl \
+uv run python -m examples.detective_agent.main
 ```
 
 ## Configuration
 
-The RLM engine reads its configuration from the a3po-engine root `.env` file via Pydantic Settings (`config.py`).
+Settings are read from `examples/detective_agent/.env` via Pydantic Settings (`config.py`).
 
-### Required Environment Variables
+### Required
 
 | Variable | Description |
 |----------|-------------|
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 
-### Optional Environment Variables (with defaults)
+### Optional (with defaults)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AZURE_OPENAI_API_VERSION` | `2024-02-15-preview` | API version |
 | `AZURE_OPENAI_MODEL` | `gpt-4o` | Model deployment name |
-| `MAX_ITERATIONS` | `20` | Top-level LLM iteration limit (each = 1 LLM call + code execution) |
-| `MAX_DEPTH` | `1` | Recursive sub-call depth limit (`1` = single model, cheapest) |
-| `CONTEXT_TOKEN_LIMIT` | `100000` | Token budget ceiling; truncation tiers activate at 50/70/85% |
-| `TEST_DATASET` | *(see config.py)* | Path to test dataset tarball |
-| `PROBLEM_STATEMENT` | *(see config.py)* | Problem description for the RCA investigation |
-| `LOG_DIR` | `results` | Directory for JSONL iteration logs and result files |
+| `MAX_ITERATIONS` | `20` | Top-level LLM iteration limit |
+| `MAX_DEPTH` | `1` | Recursive sub-call depth (`1` = single model) |
+| `CONTEXT_TOKEN_LIMIT` | `100000` | Token budget ceiling; truncation tiers at 50/70/85% |
+| `APP_README_PATH` | `examples/banking_app/README.md` | Path to app documentation |
+| `TRACES_PATH` | `examples/banking_app/otel-traces.jsonl` | Path to OTEL JSONL traces |
+| `INVESTIGATION_FOCUS` | *(empty)* | Optional hint (e.g. `"focus on the security agent"`) |
+| `LOG_DIR` | `results` | Output directory for logs and result files |
 | `VERBOSE` | `true` | Enable rich console output |
 
 ## Project Structure
 
 ```
-src/rlm/
-├── main.py              # Entry point
+detective_agent/
+├── main.py              # Entry point (behavioral deviation detection)
 ├── config.py            # Pydantic Settings configuration
-├── preprocessor.py      # Tarball extraction and file manifest
-├── logging.py           # Log setup
+├── preprocessor.py      # Tarball extraction and file manifest (RCA use case)
+├── log_utils.py         # Log setup
 ├── clients/             # LLM clients (Azure OpenAI, Anthropic, LiteLLM, OpenAI)
-│   ├── base_lm.py       # Base client interface
-│   ├── azure_openai.py  # Azure OpenAI client
-│   ├── anthropic_client.py
-│   ├── litellm_client.py
-│   └── openai_client.py
 ├── core/                # RLM loop, LM handler, parsing, types
-│   ├── rlm_loop.py      # Main recursive loop
-│   ├── lm_handler.py    # LLM interaction handler
-│   ├── parsing.py       # Response parser
-│   ├── rlm_utils.py     # Utilities
-│   ├── comms_utils.py   # Communication helpers
-│   ├── base_prompts.py  # Prompt templates
-│   └── types.py         # Type definitions
 ├── context/             # Context management
 │   ├── budget.py        # ContextBudget — 4-tier token truncation
-│   └── history_manager.py  # Compresses old REPL outputs under pressure
+│   └── history_manager.py
 ├── environment/         # REPL environments
-│   ├── base_env.py      # Base environment
-│   ├── local_repl.py    # Local REPL
-│   ├── rca_repl.py      # RCA-specific REPL with injected helpers
-│   └── helpers.py       # Filesystem helpers injected into REPL
-├── logger/              # RLM iteration logger
-│   ├── rlm_logger.py    # JSONL iteration logging
-│   └── verbose.py       # Rich console output
-└── prompts/             # RCA system prompt
-    └── system_prompt.py # Domain-expert prompt with methodology
+│   ├── local_repl.py    # Base local REPL
+│   ├── detector_repl.py # DetectorREPL — OTEL trace helpers injected
+│   ├── detector_helpers.py  # load_traces, extract_log_records, get_errors, …
+│   ├── rca_repl.py      # RcaREPL — filesystem helpers injected
+│   └── helpers.py       # Filesystem helpers (read_file_safe, grep, …)
+├── logger/              # Iteration logger (JSONL + rich console)
+├── prompts/
+│   ├── detector_system_prompt.py  # Behavioral deviation detection prompt
+│   └── system_prompt.py           # RCA prompt
+└── examples/
+    └── banking_app/     # SentinelBank AI example dataset
+        ├── README.md
+        └── otel-traces.jsonl
 ```
 
 ## How It Works
 
-1. **Preprocessing** — `Preprocessor` extracts the tarball into a temp directory and builds a file manifest (path, size, line count) so the LM doesn't waste an iteration on extraction.
-2. **RLM Initialization** — An `RcaREPL` environment is created with filesystem helpers and the file manifest injected into the REPL namespace. `ContextBudget` tracks token usage with 4-tier truncation (50/70/85/100%).
-3. **Investigation Loop** — The LM reads files, analyzes logs and configs, runs code in the REPL, and builds its understanding incrementally. Phase-injection inserts budget-pressure reminders at key milestones.
-4. **Output** — The final result and a summary are written to `results/`.
+1. **Input loading** — The app README and OTEL traces file are resolved from config and read into memory. No extraction step needed.
+2. **RLM initialization** — A `DetectorREPL` environment is created with OTEL helpers (`load_traces`, `extract_log_records`, `get_errors`, `get_component_timeline`, `summarize_component`, …) and `app_readme` injected into the REPL namespace. `ContextBudget` tracks token usage with 4-tier truncation.
+3. **Investigation loop** — The LM extracts the expected spec from the README, loads and triages traces, cross-references actual vs. documented behaviour per component, and builds a compliance verdict. Phase-injection inserts budget-pressure reminders at key milestones.
+4. **Output** — The compliance report and a cost/iteration summary are written to `results/`.
 
 ## Troubleshooting
 
 | Error | Fix |
 |-------|-----|
-| `Tarball not found` | Check `TEST_DATASET` in `.env` — use an absolute path if relative resolution fails |
-| `AZURE_OPENAI_API_KEY not set` | Ensure `AZURE_OPENAI_API_KEY` is set in the root `.env` |
+| `README not found` | Check `APP_README_PATH` in `.env` |
+| `Traces file not found` | Check `TRACES_PATH` in `.env` |
+| `AZURE_OPENAI_API_KEY not set` | Set `AZURE_OPENAI_API_KEY` in `.env` |
 | Investigation terminates early | Increase `MAX_ITERATIONS` in `.env` |
-| `ModuleNotFoundError` | Run `uv sync` to install RLM dependencies (`openai`, `anthropic`, `litellm`, `pydantic-settings`, `rich`) |
+| `ModuleNotFoundError` | Run `uv sync` in the `detective_agent` directory |
 
 ## References
 

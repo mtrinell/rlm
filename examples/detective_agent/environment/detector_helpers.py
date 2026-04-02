@@ -24,6 +24,14 @@ _SEVERITY_MAP: dict[int, str] = {
     21: "FATAL",
 }
 
+# OTEL span status code → human-readable text (OTLP proto3 StatusCode enum)
+# 0 = STATUS_CODE_UNSET (treated as OK), 1 = STATUS_CODE_OK, 2 = STATUS_CODE_ERROR
+_SPAN_STATUS_MAP: dict[int, str] = {
+    0: "UNSET",
+    1: "OK",
+    2: "ERROR",
+}
+
 _NS_PER_SEC = 1_000_000_000
 
 
@@ -151,7 +159,9 @@ def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, An
         Returns:
             List of flat span dicts with keys:
               trace_id, span_id, parent_span_id, name, kind,
-              start_ns, end_ns, duration_ms, service_name, scope, attributes, status.
+              start_ns, end_ns, duration_ms, service_name, scope, attributes, status,
+              status_code (int: 0=UNSET, 1=OK, 2=ERROR),
+              status_text (str: "UNSET"/"OK"/"ERROR" — only "ERROR" indicates a failure).
 
         """
         spans: list[dict[str, Any]] = []
@@ -165,6 +175,10 @@ def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, An
                         start_ns = int(span.get("startTimeUnixNano", 0) or 0)
                         end_ns = int(span.get("endTimeUnixNano", 0) or 0)
                         duration_ms = (end_ns - start_ns) / 1_000_000 if end_ns > start_ns else 0
+                        raw_status = span.get("status", {})
+                        status_code = int(raw_status.get("code", 0))
+                        # Decode OTLP status: 0=UNSET (OK), 1=OK, 2=ERROR
+                        status_text = _SPAN_STATUS_MAP.get(status_code, f"UNKNOWN({status_code})")
                         spans.append(
                             {
                                 "trace_id": span.get("traceId", ""),
@@ -178,7 +192,9 @@ def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, An
                                 "service_name": service_name,
                                 "scope": scope_name,
                                 "attributes": _attrs_to_dict(span.get("attributes", [])),
-                                "status": span.get("status", {}),
+                                "status": raw_status,
+                                "status_code": status_code,
+                                "status_text": status_text,  # "UNSET"/"OK"/"ERROR" — NOT an error unless "ERROR"
                             }
                         )
         spans.sort(key=lambda s: s["start_ns"])
