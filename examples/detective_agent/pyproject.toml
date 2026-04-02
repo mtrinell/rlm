@@ -1,0 +1,14 @@
+[project]
+name = "detective-agent"
+version = "0.1.0"
+description = "Detector agent using Recursive Language Models for root cause analysis."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.75.0",
+    "litellm>=1.0.0",
+    "openai>=2.0.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "rich>=13.0.0",
+]
