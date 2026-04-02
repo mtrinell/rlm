@@ -76,8 +76,8 @@ class VerbosePrinter:
             return
         title = Text()
         title.append("◆ ", style=STYLE_ACCENT)
-        title.append("A3PO RLM Engine", style=STYLE_PRIMARY)
-        title.append(" ━ Root Cause Analysis", style=STYLE_MUTED)
+        title.append("Detective Agent", style=STYLE_PRIMARY)
+        title.append(" ━ RLM implementation", style=STYLE_MUTED)
 
         config_table = Table(show_header=False, show_edge=False, box=None, padding=(0, 2), expand=True)
         config_table.add_column("key", style=STYLE_MUTED, width=16)

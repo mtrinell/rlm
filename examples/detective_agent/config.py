@@ -53,14 +53,27 @@ class Settings(BaseSettings):
         description="Inject filesystem helper functions into the REPL namespace.",
     )
 
-    # ── Dataset Configuration ─────────────────────────────────────────────────
-    test_dataset: str = Field(
-        default="../a3po-engine/tests/datasets/EXP08_20240502_133631_REDUCED_ROUTERS.tar",
-        description="Path to test dataset tarball (relative to project root or absolute).",
+    # ── Input: App Under Test ─────────────────────────────────────────────────
+    app_readme_path: str = Field(
+        default="examples/banking_app/README.md",
+        description=(
+            "Path to the README / documentation file of the application under test "
+            "(relative to the detective_agent project root or absolute)."
+        ),
     )
-    problem_statement: str = Field(
-        default="The vote application, running on port 31000, is no longer available.",
-        description="Problem statement for RCA.",
+    traces_path: str = Field(
+        default="examples/banking_app/otel-traces.jsonl",
+        description=(
+            "Path to the OpenTelemetry JSONL traces file produced by the application under test "
+            "(relative to the detective_agent project root or absolute)."
+        ),
+    )
+    investigation_focus: str = Field(
+        default="",
+        description=(
+            "Optional hint for the investigation (e.g. 'focus on the security agent'). "
+            "Leave empty for a full behavioral compliance scan."
+        ),
     )
 
     # ── Logging / Output ─────────────────────────────────────────────────────
@@ -117,10 +130,16 @@ class Settings(BaseSettings):
         return p if p.is_absolute() else self.project_root / p
 
     @property
-    def resolved_tarball(self) -> Path:
-        """Absolute path to the dataset tarball."""
-        p = Path(self.test_dataset)
-        return p if p.is_absolute() else (self.project_root / p).resolve()
+    def resolved_app_readme_path(self) -> Path:
+        """Absolute path to the app README / documentation file."""
+        p = Path(self.app_readme_path)
+        return p if p.is_absolute() else (Path(__file__).parent / p).resolve()
+
+    @property
+    def resolved_traces_path(self) -> Path:
+        """Absolute path to the OTEL JSONL traces file."""
+        p = Path(self.traces_path)
+        return p if p.is_absolute() else (Path(__file__).parent / p).resolve()
 
     @property
     def backend_kwargs(self) -> dict:

@@ -1,3 +1,3 @@
-"""A3PO RLM Engine - Root Cause Analysis using Recursive Language Models."""
+"""Detective Agent Example"""
 
 __version__ = "0.1.0"
