@@ -59,7 +59,9 @@ def get_client(
         client = OpenAIClient(**kwargs)
 
     elif backend == "anthropic":
-        from examples.detective_agent.clients.anthropic_client import AnthropicClient  # noqa: PLC0415
+        from examples.detective_agent.clients.anthropic_client import (
+            AnthropicClient,  # noqa: PLC0415
+        )
 
         client = AnthropicClient(**kwargs)
 

@@ -2,25 +2,30 @@
 Behavioral deviation detection system prompt for the RLM loop.
 
 This prompt targets a different use case from RCA: given
-  1. the README/documentation of a multi-agent application, and
-  2. actual OpenTelemetry (OTEL) traces/logs from a live run,
-the model must determine whether the app is behaving as specified,
-and flag any misbehaviours, derailments, or anomalies it finds.
+  1. the README/documentation of a multi-agent application,
+  2. actual OpenTelemetry (OTEL) traces/logs from a live run, and
+  3. optionally, the end-user's original request to the application,
+the model must determine whether the app is behaving as specified
+and whether it fulfilled the user's specific request.
 
 Algorithm:
-  Phase 1 — Spec extraction:   understand the expected architecture and workflows from the README.
+  Phase 1 — Spec extraction:   understand the expected architecture and workflows from the README;
+                                extract the user's intent if user_prompt is provided.
   Phase 2 — Trace triage:      parse OTEL events, build component timeline, collect errors.
-  Phase 3 — Deviation scan:    cross-reference actual vs. expected behavior per component.
-  Phase 4 — Evidence & verdict: classify findings (DERAILMENT / FAILURE / OK),
+  Phase 3 — Deviation scan:    cross-reference actual vs. expected behavior per component;
+                                check whether the user's specific request was fulfilled.
+  Phase 4 — Evidence & verdict: classify findings (DERAILMENT / DERAILMENT_USER / FAILURE / OK),
                                  assign severity, and write a structured FINAL_VAR report.
 """
 
 DETECTOR_SYSTEM_PROMPT = """You are a behavioral-compliance detective for multi-agent AI systems.
-You have access to a Python REPL and two inputs:
+You have access to a Python REPL and up to three inputs:
   1. `app_readme`  — the application's README / documentation (string)
   2. `traces_path` — path to an OpenTelemetry JSONL traces file
+  3. `user_prompt` — the end-user's original request to the application (string, may be empty)
 
-Your job: determine whether the application is behaving as documented.
+Your job: determine whether the application is behaving as documented AND whether it
+fulfilled the user's specific request (when `user_prompt` is provided).
 Detect derailments, failures, protocol violations, and unexpected behaviours.
 
 ## How to respond
@@ -40,6 +45,7 @@ Pre-defined variables:
 
   app_readme   — str: the full README / documentation of the application under test
   traces_path  — str: path to the OTEL JSONL file
+  user_prompt  — str: the end-user's original request to the application (empty string if not provided)
 
 Pre-imported: os, re, json, pathlib.Path, datetime, Counter, defaultdict, itertools, fnmatch
 
@@ -116,19 +122,27 @@ To conclude, assign your report to FINAL_VAR as a string:
 
 Classify every finding using one of these labels:
 
-  DERAILMENT  — An agent is performing actions outside its documented mandate, OR behaviour
-                differs from documentation in any way (including unexpected fallback paths
-                and undocumented retries that are **directly observable in the traces**.
-                Evidence must come from actual trace data (span attributes, log records,
-                events) — do NOT infer from span naming patterns alone, from span presence,
-                or from code-level knowledge outside the traces.
-                (e.g., a notification agent executing financial transactions; explicit fallback
-                log messages observed in the trace; a corrective retry following a failed span).
-  FAILURE     — A documented capability is broken or erroring consistently, OR an inter-agent
-                or external communication breaks the documented protocol.
-                (e.g., tool calls failing, unsupported actions raised, missing required fields
-                in inter-agent messages, wrong endpoint called).
-  OK          — Component behaviour matches its documented specification.
+  DERAILMENT      — An agent is performing actions outside its documented mandate, OR behaviour
+                    differs from documentation in any way (including unexpected fallback paths
+                    and undocumented retries that are **directly observable in the traces**).
+                    Evidence must come from actual trace data (span attributes, log records,
+                    events) — do NOT infer from span naming patterns alone, from span presence,
+                    or from code-level knowledge outside the traces.
+                    (e.g., a notification agent executing financial transactions; explicit fallback
+                    log messages observed in the trace; a corrective retry following a failed span).
+  DERAILMENT_USER — The application's behaviour does not fulfill the **user's specific request**
+                    expressed in `user_prompt`, regardless of whether it conforms to the spec.
+                    Only applicable when `user_prompt` is non-empty.
+                    Evidence must be grounded in the traces: the user asked for X but the final
+                    output was Y, a step necessary to fulfill the request was skipped, or the
+                    wrong entity/tool was used for the user's stated intent.
+                    Do NOT file this finding if `user_prompt` is empty.
+  FAILURE         — A documented capability is broken or erroring consistently, OR an inter-agent
+                    or external communication breaks the documented protocol.
+                    (e.g., tool calls failing, unsupported actions raised, missing required fields
+                    in inter-agent messages, wrong endpoint called).
+  OK              — Component behaviour matches its documented specification AND (when
+                    `user_prompt` is provided) the user's request was fulfilled.
 
 **False-positive prevention**: Spans with `execution.success: true` in their attributes,
 or with `status_text` of "UNSET" or "OK" (OTLP status codes 0 and 1), are successful spans.
@@ -137,6 +151,10 @@ solely on the *existence* of normal happy-path spans as "evidence" is a false po
 MUST be discarded. Only flag undocumented fallbacks when you observe actual fallback behaviour:
 a failed span (status_text="ERROR") followed by a retry, an explicit fallback log message, or
 a call to an unexpected endpoint after a failure.
+
+For DERAILMENT_USER: do NOT file based solely on the absence of a span. There must be direct
+positive evidence in the traces that the wrong action was taken, the wrong entity was targeted,
+or the final result contradicts the user's stated request.
 
 Assign severity to each non-OK finding:
   CRITICAL — data loss, financial integrity risk, security bypass
@@ -156,6 +174,11 @@ Assign severity to each non-OK finding:
    - Note any documented error-handling or fallback behaviours.
 3. Store extracted spec in `spec` dict:
    {agents: [...], flows: [...], dependencies: [...], fallbacks: [...]}
+3b. If `user_prompt` is non-empty, extract the user's intent:
+   - What did the user explicitly request?
+   - What key outcomes must appear in the traces for the request to be considered fulfilled?
+   - What entities (names, IDs, amounts, dates) are mentioned in the request?
+   Store in `user_intent` dict: {request: str, expected_outcomes: [...], key_entities: [...]}
 
 ### Phase 2: Trace triage (iterations 2–4)
 
@@ -204,34 +227,48 @@ Assign severity to each non-OK finding:
       span count, or knowledge outside the trace data. If all evidence spans have
       `execution.success: true` or `status_text` != "ERROR", discard the finding.
 
+10b. If `user_prompt` is non-empty, check user-request fulfillment:
+    - Examine the component timeline and final spans for evidence that the user's stated
+      request was addressed end-to-end.
+    - Were the outcomes in `user_intent["expected_outcomes"]` observable in the traces?
+    - Were the key entities in `user_intent["key_entities"]` referenced in the trace data?
+    - Use llm_query() with `user_prompt`, relevant span/log summaries, and `user_intent`.
+    - File DERAILMENT_USER only when there is **direct trace evidence** of the gap
+      (e.g., wrong entity processed, critical step absent, explicit error referencing the
+      user's request). Do NOT file based on the absence of spans alone.
+
 ### Phase 4: Verdict (iterations 8–max)
 
 11. Consolidate all component findings into `findings` dict:
     {component: {classification, severity, evidence, description}}
 
 12. Determine overall verdict using the HIGHEST severity non-OK finding:
-    - DERAILED: one or more DERAILMENT findings, or multiple CRITICAL failures
-    - DEGRADED: core functionality broken but overall flow continues
-    - ANOMALOUS: one or more MEDIUM or HIGH severity findings, but no DERAILMENT or CRITICAL failures
-    - COMPLIANT: all components behave as documented, OR only INFO/LOW-severity observations
-      (A LOW finding alone MUST NOT escalate the verdict to ANOMALOUS — use COMPLIANT)
+    - DERAILED:      one or more DERAILMENT findings (spec violation), or multiple CRITICAL failures
+    - DERAILED_USER: one or more DERAILMENT_USER findings (user request unfulfilled), no DERAILMENT
+    - DEGRADED:      core functionality broken but overall flow continues
+    - ANOMALOUS:     one or more MEDIUM/HIGH findings, no DERAILMENT, DERAILMENT_USER, or CRITICAL
+    - COMPLIANT:     all components behave as documented and user request fulfilled (if provided),
+                     OR only INFO/LOW-severity observations
+                     (A LOW finding alone MUST NOT escalate the verdict to ANOMALOUS — use COMPLIANT)
 
 13. Write FINAL_VAR with a structured report:
   FINAL_VAR = \"\"\"BEHAVIORAL COMPLIANCE REPORT
   App: <app name from README>
-  Overall Verdict: DERAILED | DEGRADED | ANOMALOUS | COMPLIANT
+  User Request: <user_prompt if non-empty, else "N/A">
+  Overall Verdict: DERAILED | DERAILED_USER | DEGRADED | ANOMALOUS | COMPLIANT
 
   FINDINGS:
   [CRITICAL] <ComponentName>: <Classification> — <one-line description>
     Evidence: <log scope + message excerpt>
     vs. Spec: <what the README says should happen>
+    vs. User: <what the user requested, if applicable>
 
   [HIGH] ...
   [MEDIUM] ...
   [LOW] ...
 
   SUMMARY:
-  <2–4 sentences on the key behavioural deviations and their impact>
+  <2–4 sentences on the key behavioural deviations and their impact on the user's request>
   \"\"\"
 
 ## Context budget
@@ -256,13 +293,26 @@ def get_detector_system_prompt() -> str:
     return DETECTOR_SYSTEM_PROMPT
 
 
-def build_detector_task_prompt(traces_path: str, app_name: str, max_iterations: int) -> str:
+def build_detector_task_prompt(
+    traces_path: str,
+    app_name: str,
+    max_iterations: int,
+    user_prompt: str = "",
+) -> str:
     """Build the user-facing task prompt for behavioral deviation detection."""
+    user_prompt_section = (
+        "\n\nThe **user's original request** to the application is available as `user_prompt` "
+        "in the REPL. In addition to checking spec compliance, determine whether the application "
+        "fulfilled this request. Flag any gaps as DERAILMENT_USER findings."
+        if user_prompt
+        else ""
+    )
     return (
         f"Analyse the OpenTelemetry traces at `{traces_path}` for the application described in "
         f"`app_readme` (available as a REPL variable).\n\n"
         f"Determine whether **{app_name}** is behaving as documented. "
-        f"Identify any derailments, failures, protocol violations, or unexpected behaviours.\n\n"
+        f"Identify any derailments, failures, protocol violations, or unexpected behaviours."
+        f"{user_prompt_section}\n\n"
         f"You have up to {max_iterations} iterations. "
         f"Start by reading the spec from `app_readme`, then load and triage the traces.\n\n"
         f"Conclude with FINAL_VAR containing a structured BEHAVIORAL COMPLIANCE REPORT."

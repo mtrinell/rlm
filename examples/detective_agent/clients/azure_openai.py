@@ -6,9 +6,8 @@ from typing import Any
 
 import openai
 
-from examples.detective_agent.core.types import ModelUsageSummary, UsageSummary
-
 from examples.detective_agent.clients.base_lm import BaseLM
+from examples.detective_agent.core.types import ModelUsageSummary, UsageSummary
 
 
 class AzureOpenAIClient(BaseLM):

@@ -75,6 +75,14 @@ class Settings(BaseSettings):
             "Leave empty for a full behavioral compliance scan."
         ),
     )
+    user_prompt: str = Field(
+        default="",
+        description=(
+            "The end-user's original request to the application under test. "
+            "When provided, the detector also checks whether the app fulfilled this request "
+            "and flags deviations as DERAILMENT_USER findings."
+        ),
+    )
 
     # ── Logging / Output ─────────────────────────────────────────────────────
     log_dir: str = Field(

@@ -19,9 +19,12 @@ import uuid
 from contextlib import contextmanager, suppress
 from typing import Any
 
-from examples.detective_agent.core.comms_utils import LMRequest, send_lm_request, send_lm_request_batched
+from examples.detective_agent.core.comms_utils import (
+    LMRequest,
+    send_lm_request,
+    send_lm_request_batched,
+)
 from examples.detective_agent.core.types import REPLResult, RLMChatCompletion
-
 from examples.detective_agent.environment.base_env import NonIsolatedEnv
 
 # =============================================================================

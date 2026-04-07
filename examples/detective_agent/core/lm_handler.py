@@ -12,8 +12,12 @@ from socketserver import StreamRequestHandler, ThreadingTCPServer
 from threading import Thread
 
 from examples.detective_agent.clients.base_lm import BaseLM
-
-from examples.detective_agent.core.comms_utils import LMRequest, LMResponse, socket_recv, socket_send
+from examples.detective_agent.core.comms_utils import (
+    LMRequest,
+    LMResponse,
+    socket_recv,
+    socket_send,
+)
 from examples.detective_agent.core.types import RLMChatCompletion, UsageSummary
 
 

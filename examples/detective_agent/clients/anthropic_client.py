@@ -5,9 +5,8 @@ from typing import Any
 
 import anthropic
 
-from examples.detective_agent.core.types import ModelUsageSummary, UsageSummary
-
 from examples.detective_agent.clients.base_lm import BaseLM
+from examples.detective_agent.core.types import ModelUsageSummary, UsageSummary
 
 
 class AnthropicClient(BaseLM):

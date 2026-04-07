@@ -16,14 +16,11 @@ import logging
 import time
 import types
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from examples.detective_agent.clients import BaseLM, get_client
 from examples.detective_agent.context.budget import ContextBudget
 from examples.detective_agent.context.history_manager import HistoryManager
-from examples.detective_agent.environment.base_env import BaseEnv, SupportsPersistence
-from examples.detective_agent.logger import RLMLogger, VerbosePrinter
-
 from examples.detective_agent.core.base_prompts import (
     RLM_BASE_SYSTEM_PROMPT,
     QueryMetadata,
@@ -46,6 +43,8 @@ from examples.detective_agent.core.types import (
     RLMIteration,
     RLMMetadata,
 )
+from examples.detective_agent.environment.base_env import BaseEnv, SupportsPersistence
+from examples.detective_agent.logger import RLMLogger, VerbosePrinter
 
 # ─── Phase injection messages ──────────────────────────────────────────────────
 # Injected into message_history when budget pressure reaches medium/aggressive

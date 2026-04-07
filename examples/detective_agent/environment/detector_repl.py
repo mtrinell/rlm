@@ -28,6 +28,7 @@ class DetectorREPL(LocalREPL):
     Additional REPL globals injected at setup:
         app_readme          — str: full README / documentation of the app under test
         traces_path         — str: path to OTEL JSONL trace file
+        user_prompt         — str: end-user's original request to the application (empty if not provided)
         load_traces         — load and parse OTEL JSONL into list of dicts
         extract_log_records — flatten all log records from loaded traces
         extract_spans       — flatten all span records from loaded traces
@@ -42,6 +43,7 @@ class DetectorREPL(LocalREPL):
         self,
         traces_path: str,
         app_readme: str = "",
+        user_prompt: str = "",
         budget: ContextBudget | None = None,
         inject_helpers: bool = True,
         **kwargs: Any,
@@ -52,6 +54,7 @@ class DetectorREPL(LocalREPL):
         Args:
             traces_path: Path to the OTEL JSONL traces file.
             app_readme: Full README / documentation content for the app under test.
+            user_prompt: The end-user's original request to the application (empty string if not provided).
             budget: ContextBudget instance for context_budget() REPL helper.
             inject_helpers: Whether to inject trace helper functions (default True).
             **kwargs: Forwarded to LocalREPL (lm_handler_address, context_payload, etc.)
@@ -59,6 +62,7 @@ class DetectorREPL(LocalREPL):
         """
         self._traces_path = traces_path
         self._app_readme = app_readme
+        self._user_prompt = user_prompt
         self._budget = budget
         self._inject_helpers = inject_helpers
 
@@ -92,3 +96,6 @@ import fnmatch
 
         self.locals["app_readme"] = self._app_readme
         self.globals["app_readme"] = self._app_readme
+
+        self.locals["user_prompt"] = self._user_prompt
+        self.globals["user_prompt"] = self._user_prompt

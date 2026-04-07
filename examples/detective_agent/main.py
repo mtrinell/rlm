@@ -101,6 +101,8 @@ def main() -> None:
     )
     if settings.investigation_focus:
         run_logger.info(f"  Focus:          {settings.investigation_focus}")
+    if settings.user_prompt:
+        run_logger.info(f"  User Prompt:    {settings.user_prompt[:120]}{'...' if len(settings.user_prompt) > 120 else ''}")
 
     # ── Validate inputs ────────────────────────────────────────────────────────
     if not readme_path.exists():
@@ -134,6 +136,7 @@ def main() -> None:
                 environment_kwargs={
                     "traces_path": str(traces_path),
                     "app_readme": app_readme,
+                    "user_prompt": settings.user_prompt,
                     "budget": budget,
                     "inject_helpers": settings.helpers_injection_enabled,
                 },
@@ -158,6 +161,7 @@ def main() -> None:
             traces_path=str(traces_path),
             app_name=app_name,
             max_iterations=settings.max_iterations,
+            user_prompt=settings.user_prompt,
         )
 
         prompt_context: dict = {
@@ -167,6 +171,8 @@ def main() -> None:
         }
         if settings.investigation_focus:
             prompt_context["investigation_focus"] = settings.investigation_focus
+        if settings.user_prompt:
+            prompt_context["user_prompt"] = settings.user_prompt
 
         try:
             result = rlm.completion(prompt=prompt_context, root_prompt=task_prompt)
