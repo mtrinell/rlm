@@ -53,34 +53,37 @@ class Settings(BaseSettings):
         description="Inject filesystem helper functions into the REPL namespace.",
     )
 
-    # ── Input: App Under Test ─────────────────────────────────────────────────
-    app_readme_path: str = Field(
-        default="examples/banking_app/README.md",
-        description=(
-            "Path to the README / documentation file of the application under test "
-            "(relative to the detective_agent project root or absolute)."
-        ),
-    )
-    traces_path: str = Field(
+    # ── Input: Dataset & Spec ─────────────────────────────────────────────────
+    dataset_path: str = Field(
         default="examples/banking_app/otel-traces.jsonl",
         description=(
-            "Path to the OpenTelemetry JSONL traces file produced by the application under test "
-            "(relative to the detective_agent project root or absolute)."
+            "Path to the dataset to analyse. Can be a single file (JSON, JSONL, YAML, CSV, "
+            "log, …), a directory, or an archive (.tar.gz, .zip, …). "
+            "Relative paths are resolved from the detective_agent directory."
+        ),
+    )
+    spec_path: str = Field(
+        default="",
+        description=(
+            "Optional path to a specification or documentation file describing the expected "
+            "behaviour of the system under analysis (e.g. a README, API spec, schema, …). "
+            "Leave empty if no spec is available. "
+            "Relative paths are resolved from the detective_agent directory."
         ),
     )
     investigation_focus: str = Field(
         default="",
         description=(
             "Optional hint for the investigation (e.g. 'focus on the security agent'). "
-            "Leave empty for a full behavioral compliance scan."
+            "Leave empty for a full scan."
         ),
     )
     user_prompt: str = Field(
         default="",
         description=(
-            "The end-user's original request to the application under test. "
-            "When provided, the detector also checks whether the app fulfilled this request "
-            "and flags deviations as DERAILMENT_USER findings."
+            "The end-user's original question or investigation directive. "
+            "When provided, the analyst also answers this question directly "
+            "and flags any gaps as findings."
         ),
     )
 
@@ -138,15 +141,17 @@ class Settings(BaseSettings):
         return p if p.is_absolute() else self.project_root / p
 
     @property
-    def resolved_app_readme_path(self) -> Path:
-        """Absolute path to the app README / documentation file."""
-        p = Path(self.app_readme_path)
+    def resolved_dataset_path(self) -> Path:
+        """Absolute path to the dataset (file, directory, or archive)."""
+        p = Path(self.dataset_path)
         return p if p.is_absolute() else (Path(__file__).parent / p).resolve()
 
     @property
-    def resolved_traces_path(self) -> Path:
-        """Absolute path to the OTEL JSONL traces file."""
-        p = Path(self.traces_path)
+    def resolved_spec_path(self) -> Path | None:
+        """Absolute path to the spec/documentation file, or None if not configured."""
+        if not self.spec_path:
+            return None
+        p = Path(self.spec_path)
         return p if p.is_absolute() else (Path(__file__).parent / p).resolve()
 
     @property

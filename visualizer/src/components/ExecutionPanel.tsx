@@ -125,12 +125,23 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
                               llm_query() from Block #{blockIdx + 1}
                             </CardTitle>
                             <div className="flex gap-2">
-                              <Badge variant="outline" className="text-[10px] font-mono">
-                                {call.prompt_tokens} in
-                              </Badge>
-                              <Badge variant="outline" className="text-[10px] font-mono">
-                                {call.completion_tokens} out
-                              </Badge>
+                              {(() => {
+                                // Support both direct token fields (new) and nested usage_summary (legacy)
+                                let inTok = call.prompt_tokens;
+                                let outTok = call.completion_tokens;
+                                if (inTok == null && call.usage_summary) {
+                                  inTok = Object.values(call.usage_summary.model_usage_summaries).reduce((s, m) => s + m.total_input_tokens, 0);
+                                  outTok = Object.values(call.usage_summary.model_usage_summaries).reduce((s, m) => s + m.total_output_tokens, 0);
+                                }
+                                return (<>
+                                  <Badge variant="outline" className="text-[10px] font-mono">
+                                    {inTok != null ? `${inTok} in` : 'n/a'}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px] font-mono">
+                                    {outTok != null ? `${outTok} out` : 'n/a'}
+                                  </Badge>
+                                </>);
+                              })()}
                               <Badge variant="outline" className="text-[10px] font-mono">
                                 {call.execution_time.toFixed(2)}s
                               </Badge>

@@ -3,15 +3,18 @@
 export interface RLMChatCompletion {
   prompt: string | Record<string, unknown>;
   response: string;
-  prompt_tokens: number;
-  completion_tokens: number;
+  // Direct token counts (new format)
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  // Nested usage summary (legacy format)
+  usage_summary?: { model_usage_summaries: Record<string, { total_input_tokens: number; total_output_tokens: number }> };
   execution_time: number;
 }
 
 export interface REPLResult {
   stdout: string;
   stderr: string;
-  locals: Record<string, unknown>;
+  locals?: Record<string, unknown>;
   execution_time: number;
   rlm_calls: RLMChatCompletion[];
 }

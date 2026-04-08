@@ -1,68 +1,29 @@
 """
-REPL helper functions for behavioral deviation detection.
+Generic file-access REPL helpers for the detector environment.
 
-These helpers provide structured access to OpenTelemetry JSONL traces,
-enabling the LLM to parse, query, and analyse application behavior
-without generating error-prone trace-parsing code from scratch.
+These helpers give the LLM structured access to any dataset — a single file,
+a directory, or an archive — without needing format-specific boilerplate.
+The LLM decides how to read and parse the data based on its content.
 """
 
 from __future__ import annotations
 
+import csv as _csv
 import json
 import re
-from datetime import UTC, datetime
+import tarfile
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
-# OTEL severity number → text mapping
-_SEVERITY_MAP: dict[int, str] = {
-    1: "TRACE",
-    5: "DEBUG",
-    9: "INFO",
-    13: "WARN",
-    17: "ERROR",
-    21: "FATAL",
-}
 
-# OTEL span status code → human-readable text (OTLP proto3 StatusCode enum)
-# 0 = STATUS_CODE_UNSET (treated as OK), 1 = STATUS_CODE_OK, 2 = STATUS_CODE_ERROR
-_SPAN_STATUS_MAP: dict[int, str] = {
-    0: "UNSET",
-    1: "OK",
-    2: "ERROR",
-}
-
-_NS_PER_SEC = 1_000_000_000
-
-
-def _ns_to_dt(ns: int) -> datetime:
-    """Convert nanosecond UNIX timestamp to UTC datetime."""
-    return datetime.fromtimestamp(ns / _NS_PER_SEC, tz=UTC)
-
-
-def _extract_attr_value(attr: dict[str, Any]) -> Any:
-    """Extract a value from an OTEL attribute dict (handles all value types)."""
-    val = attr.get("value", {})
-    for key in ("stringValue", "intValue", "doubleValue", "boolValue"):
-        if key in val:
-            return val[key]
-    if "arrayValue" in val:
-        values = val["arrayValue"].get("values", [])
-        return [_extract_attr_value({"value": v}) for v in values]
-    return None
-
-
-def _attrs_to_dict(attributes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Flatten an OTEL attributes list into a plain dict."""
-    return {a["key"]: _extract_attr_value(a) for a in attributes if "key" in a}
-
-
-def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, Any]:
+def build_detector_helpers(dataset_path: str, budget: Any = None) -> dict[str, Any]:
     """
-    Build the dict of helper functions for OTEL trace analysis.
+    Build the dict of generic file-access helpers for REPL injection.
 
     Args:
-        traces_path: Path to the OTEL JSONL traces file.
+        dataset_path: Path to the dataset (file, folder, or archive).
         budget: Optional ContextBudget instance for context_budget() calls.
 
     Returns:
@@ -70,26 +31,171 @@ def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, An
 
     """
 
-    def load_traces(max_lines: int | None = None) -> list[dict[str, Any]]:
+    def list_files(path: str | None = None) -> list[dict[str, Any]]:
         """
-        Parse the OTEL JSONL file into a list of resource batch dicts.
-
-        Each element corresponds to one JSON line in the file, which may
-        contain `resourceLogs` and/or `resourceSpans` keys.
+        List files at path. Works on directories, archives (tar/zip), and single files.
 
         Args:
-            max_lines: If set, read only the first N lines (useful for sampling).
+            path: Path to explore. Defaults to dataset_path if not provided.
+
+        Returns:
+            List of dicts: {path, name, size, ext, is_dir}
+
+        """
+        target = Path(path) if path is not None else Path(dataset_path)
+        results: list[dict[str, Any]] = []
+
+        if target.is_dir():
+            for f in sorted(target.rglob("*")):
+                results.append(
+                    {
+                        "path": str(f),
+                        "name": f.name,
+                        "size": f.stat().st_size if f.is_file() else 0,
+                        "ext": f.suffix.lower(),
+                        "is_dir": f.is_dir(),
+                    }
+                )
+            return results
+
+        if not target.is_file():
+            return [{"error": f"Path not found: {target}"}]
+
+        # Try tar first (before zip — .tar.gz passes zipfile check on some platforms)
+        try:
+            if tarfile.is_tarfile(str(target)):
+                with tarfile.open(str(target), "r:*") as tf:
+                    for member in tf.getmembers():
+                        results.append(
+                            {
+                                "path": member.name,
+                                "name": Path(member.name).name,
+                                "size": member.size,
+                                "ext": Path(member.name).suffix.lower(),
+                                "is_dir": member.isdir(),
+                            }
+                        )
+                return results
+        except Exception:
+            pass
+
+        try:
+            if zipfile.is_zipfile(str(target)):
+                with zipfile.ZipFile(str(target), "r") as zf:
+                    for info in zf.infolist():
+                        results.append(
+                            {
+                                "path": info.filename,
+                                "name": Path(info.filename).name,
+                                "size": info.file_size,
+                                "ext": Path(info.filename).suffix.lower(),
+                                "is_dir": info.is_dir(),
+                            }
+                        )
+                return results
+        except Exception:
+            pass
+
+        # Single plain file
+        results.append(
+            {
+                "path": str(target),
+                "name": target.name,
+                "size": target.stat().st_size,
+                "ext": target.suffix.lower(),
+                "is_dir": False,
+            }
+        )
+        return results
+
+    def read_file(path: str, max_bytes: int | None = None) -> str:
+        """
+        Read a file as UTF-8 text (non-UTF-8 bytes are replaced with the replacement char).
+
+        Args:
+            path: Path to the file.
+            max_bytes: If set, read only the first N bytes (useful for sampling large files).
+
+        Returns:
+            File contents as a string.
+
+        """
+        p = Path(path)
+        try:
+            with open(p, "rb") as fh:
+                raw = fh.read(max_bytes) if max_bytes is not None else fh.read()
+            return raw.decode("utf-8", errors="replace")
+        except FileNotFoundError:
+            return f"[ERROR] File not found: {path}"
+        except OSError as e:
+            return f"[ERROR] {e}"
+
+    def read_lines(path: str, max_lines: int | None = None) -> list[str]:
+        """
+        Read a file as a list of lines (newlines stripped).
+
+        Args:
+            path: Path to the file.
+            max_lines: If set, return only the first N lines.
+
+        Returns:
+            List of line strings.
+
+        """
+        p = Path(path)
+        try:
+            lines: list[str] = []
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh):
+                    if max_lines is not None and i >= max_lines:
+                        break
+                    lines.append(line.rstrip("\n"))
+            return lines
+        except FileNotFoundError:
+            return [f"[ERROR] File not found: {path}"]
+        except OSError as e:
+            return [f"[ERROR] {e}"]
+
+    def read_json(path: str) -> Any:
+        """
+        Parse a JSON file and return the parsed object.
+
+        Args:
+            path: Path to the JSON file.
+
+        Returns:
+            Parsed JSON object (dict or list).
+
+        """
+        p = Path(path)
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            return {"error": f"File not found: {path}"}
+        except json.JSONDecodeError as e:
+            return {"error": f"JSON parse error: {e}"}
+        except OSError as e:
+            return {"error": str(e)}
+
+    def read_jsonl(path: str, max_lines: int | None = None) -> list[Any]:
+        """
+        Parse a JSONL file (one JSON object per line). Blank and malformed lines are skipped.
+
+        Args:
+            path: Path to the JSONL file.
+            max_lines: If set, parse only the first N non-blank lines.
 
         Returns:
             List of parsed JSON objects.
 
         """
-        path = Path(traces_path)
-        results = []
+        p = Path(path)
+        results: list[Any] = []
         try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                for i, line in enumerate(fh):
-                    if max_lines is not None and i >= max_lines:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if max_lines is not None and len(results) >= max_lines:
                         break
                     line = line.strip()
                     if not line:
@@ -99,197 +205,223 @@ def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, An
                     except json.JSONDecodeError:
                         pass
         except FileNotFoundError:
-            return [{"error": f"File not found: {traces_path}"}]
+            return [{"error": f"File not found: {path}"}]
         except OSError as e:
             return [{"error": str(e)}]
         return results
 
-    def extract_log_records(traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def detect_format(path: str) -> str:
         """
-        Flatten all log records from parsed OTEL resource batches.
+        Detect the format of a file by extension, then by content inspection.
+
+        Returns one of: "json", "jsonl", "yaml", "csv", "xml", "html", "toml",
+        "ini", "log", "text", "archive", "binary", or "unknown".
 
         Args:
-            traces: Output of load_traces().
+            path: Path to the file.
 
         Returns:
-            List of flat log record dicts with keys:
-              timestamp_ns, timestamp_dt, severity, severity_text, body,
-              scope, attributes, trace_id, span_id, service_name.
+            Format string.
 
         """
-        records: list[dict[str, Any]] = []
-        for batch in traces:
-            # Extract service name from resource attributes
-            service_name = "unknown"
-            for rl in batch.get("resourceLogs", []):
-                resource_attrs = _attrs_to_dict(rl.get("resource", {}).get("attributes", []))
-                service_name = resource_attrs.get("service.name", "unknown")
-                for scope_log in rl.get("scopeLogs", []):
-                    scope_name = scope_log.get("scope", {}).get("name", "")
-                    for rec in scope_log.get("logRecords", []):
-                        ts_ns = int(rec.get("timeUnixNano", 0) or 0)
-                        sev_num = int(rec.get("severityNumber", 9))
-                        body = rec.get("body", {}).get("stringValue", "")
-                        attrs = _attrs_to_dict(rec.get("attributes", []))
-                        records.append(
-                            {
-                                "timestamp_ns": ts_ns,
-                                "timestamp_dt": _ns_to_dt(ts_ns) if ts_ns else None,
-                                "severity": sev_num,
-                                "severity_text": rec.get("severityText") or _SEVERITY_MAP.get(sev_num, str(sev_num)),
-                                "body": body,
-                                "scope": scope_name,
-                                "attributes": attrs,
-                                "trace_id": rec.get("traceId", ""),
-                                "span_id": rec.get("spanId", ""),
-                                "service_name": service_name,
-                            }
-                        )
-        # Sort by timestamp
-        records.sort(key=lambda r: r["timestamp_ns"])
-        return records
+        p = Path(path)
+        ext = p.suffix.lower()
 
-    def extract_spans(traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ext_map: dict[str, str] = {
+            ".json": "json",
+            ".jsonl": "jsonl",
+            ".ndjson": "jsonl",
+            ".yaml": "yaml",
+            ".yml": "yaml",
+            ".csv": "csv",
+            ".tsv": "csv",
+            ".xml": "xml",
+            ".html": "html",
+            ".htm": "html",
+            ".toml": "toml",
+            ".ini": "ini",
+            ".cfg": "ini",
+            ".conf": "ini",
+            ".log": "log",
+            ".txt": "text",
+            ".md": "text",
+            ".rst": "text",
+            ".tar": "archive",
+            ".gz": "archive",
+            ".tgz": "archive",
+            ".zip": "archive",
+            ".bz2": "archive",
+            ".xz": "archive",
+        }
+        if ext in ext_map:
+            return ext_map[ext]
+
+        # Content-based detection
+        try:
+            with open(p, "rb") as fh:
+                header = fh.read(512)
+        except OSError:
+            return "unknown"
+
+        # Magic bytes
+        if header[:2] == b"\x1f\x8b":
+            return "archive"  # gzip
+        if header[:4] == b"PK\x03\x04":
+            return "archive"  # zip
+        if header[:5] == b"BZh91":
+            return "archive"  # bzip2
+
+        try:
+            text = header.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            return "binary"
+
+        first = text[:1]
+        if first in ("{", "["):
+            # Could be JSON or first line of JSONL
+            first_line = text.splitlines()[0].strip() if text.splitlines() else text
+            if first_line.startswith("{") or first_line.startswith("["):
+                # Check second line for JSONL detection
+                lines = text.splitlines()
+                if len(lines) > 1 and lines[1].strip().startswith("{"):
+                    return "jsonl"
+                return "json"
+        if first == "<":
+            return "xml"
+        if "," in text and "\n" in text:
+            return "csv"
+
+        return "text"
+
+    def extract_archive(path: str, dest: str | None = None) -> str:
         """
-        Flatten all span records from parsed OTEL resource batches.
+        Extract a tar (.tar, .tar.gz, .tgz, .tar.bz2) or zip archive.
 
         Args:
-            traces: Output of load_traces().
+            path: Path to the archive file.
+            dest: Destination directory. If None, extracts to a temp directory.
 
         Returns:
-            List of flat span dicts with keys:
-              trace_id, span_id, parent_span_id, name, kind,
-              start_ns, end_ns, duration_ms, service_name, scope, attributes, status,
-              status_code (int: 0=UNSET, 1=OK, 2=ERROR),
-              status_text (str: "UNSET"/"OK"/"ERROR" — only "ERROR" indicates a failure).
+            Absolute path to the extraction directory as a string.
+
+        Raises:
+            ValueError: If the file is not a recognised archive.
 
         """
-        spans: list[dict[str, Any]] = []
-        for batch in traces:
-            for rs in batch.get("resourceSpans", []):
-                resource_attrs = _attrs_to_dict(rs.get("resource", {}).get("attributes", []))
-                service_name = resource_attrs.get("service.name", "unknown")
-                for scope_span in rs.get("scopeSpans", []):
-                    scope_name = scope_span.get("scope", {}).get("name", "")
-                    for span in scope_span.get("spans", []):
-                        start_ns = int(span.get("startTimeUnixNano", 0) or 0)
-                        end_ns = int(span.get("endTimeUnixNano", 0) or 0)
-                        duration_ms = (end_ns - start_ns) / 1_000_000 if end_ns > start_ns else 0
-                        raw_status = span.get("status", {})
-                        status_code = int(raw_status.get("code", 0))
-                        # Decode OTLP status: 0=UNSET (OK), 1=OK, 2=ERROR
-                        status_text = _SPAN_STATUS_MAP.get(status_code, f"UNKNOWN({status_code})")
-                        spans.append(
-                            {
-                                "trace_id": span.get("traceId", ""),
-                                "span_id": span.get("spanId", ""),
-                                "parent_span_id": span.get("parentSpanId", ""),
-                                "name": span.get("name", ""),
-                                "kind": span.get("kind", 0),
-                                "start_ns": start_ns,
-                                "end_ns": end_ns,
-                                "duration_ms": duration_ms,
-                                "service_name": service_name,
-                                "scope": scope_name,
-                                "attributes": _attrs_to_dict(span.get("attributes", [])),
-                                "status": raw_status,
-                                "status_code": status_code,
-                                "status_text": status_text,  # "UNSET"/"OK"/"ERROR" — NOT an error unless "ERROR"
-                            }
-                        )
-        spans.sort(key=lambda s: s["start_ns"])
-        return spans
+        src = Path(path)
+        if dest is None:
+            dest_path = Path(tempfile.mkdtemp(prefix="rlm_extract_"))
+        else:
+            dest_path = Path(dest)
+            dest_path.mkdir(parents=True, exist_ok=True)
 
-    def get_errors(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """
-        Filter log records to severity >= 17 (ERROR and FATAL).
+        # Try tar first
+        try:
+            if tarfile.is_tarfile(str(src)):
+                with tarfile.open(str(src), "r:*") as tf:
+                    for member in tf.getmembers():
+                        # Security: reject absolute paths and path traversal
+                        member_path = Path(member.name)
+                        if member_path.is_absolute() or ".." in member_path.parts:
+                            continue
+                        tf.extract(member, dest_path, set_attrs=False)
+                return str(dest_path)
+        except Exception:
+            pass
 
-        Args:
-            records: Output of extract_log_records().
+        # Try zip
+        try:
+            if zipfile.is_zipfile(str(src)):
+                with zipfile.ZipFile(str(src), "r") as zf:
+                    for name in zf.namelist():
+                        parts = Path(name).parts
+                        # Security: reject absolute paths and path traversal
+                        if ".." in parts or (parts and Path(parts[0]).is_absolute()):
+                            continue
+                        zf.extract(name, dest_path)
+                return str(dest_path)
+        except Exception:
+            pass
 
-        Returns:
-            Filtered list of error/fatal records.
+        raise ValueError(f"Could not extract archive (unsupported or corrupt format): {path}")
 
-        """
-        return [r for r in records if r["severity"] >= 17]
-
-    def get_component_timeline(
-        records: list[dict[str, Any]],
-        max_per_component: int = 200,
-    ) -> dict[str, list[dict[str, Any]]]:
-        """
-        Group log records by component scope, sorted by timestamp.
-
-        Args:
-            records: Output of extract_log_records().
-            max_per_component: Cap the number of records returned per component.
-
-        Returns:
-            Dict mapping scope name → list of records (capped at max_per_component).
-
-        """
-        timeline: dict[str, list[dict[str, Any]]] = {}
-        for rec in records:
-            scope = rec["scope"] or "unknown"
-            timeline.setdefault(scope, []).append(rec)
-        for scope in timeline:
-            timeline[scope] = timeline[scope][:max_per_component]
-        return timeline
-
-    def search_traces(
-        records: list[dict[str, Any]],
+    def search_lines(
+        path: str,
         pattern: str,
         flags: str = "i",
+        max_results: int = 200,
     ) -> list[dict[str, Any]]:
         """
-        Search log record bodies with a regex pattern.
+        Search a file's lines for a regex pattern (grep-style).
 
         Args:
-            records: Output of extract_log_records().
-            pattern: Regex pattern to search for.
-            flags: 'i' = case-insensitive (default), 'n' = case-sensitive.
+            path: Path to the file.
+            pattern: Python regex pattern.
+            flags: Regex flags string — "i" = case-insensitive (default), "" = none.
+            max_results: Maximum number of matching lines to return.
 
         Returns:
-            Matching records.
+            List of dicts: {path, line_no (1-based), line}
 
         """
         re_flags = re.IGNORECASE if "i" in flags else 0
         try:
             compiled = re.compile(pattern, re_flags)
-        except re.error:
-            return [{"error": f"Invalid regex: {pattern}"}]
-        return [r for r in records if compiled.search(r.get("body", ""))]
+        except re.error as e:
+            return [{"error": f"Invalid regex: {e}"}]
 
-    def summarize_component(records: list[dict[str, Any]], component: str) -> str:
+        results: list[dict[str, Any]] = []
+        p = Path(path)
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh, start=1):
+                    if compiled.search(line):
+                        results.append({"path": str(p), "line_no": i, "line": line.rstrip("\n")})
+                        if len(results) >= max_results:
+                            break
+        except FileNotFoundError:
+            return [{"error": f"File not found: {path}"}]
+        except OSError as e:
+            return [{"error": str(e)}]
+        return results
+
+    def read_csv(path: str, max_rows: int | None = None) -> list[dict[str, str]]:
         """
-        Return a human-readable text summary of all records for a given scope.
+        Parse a CSV (or TSV) file into a list of row dicts keyed by header.
 
         Args:
-            records: Output of extract_log_records().
-            component: Scope name to filter on (exact match or substring).
+            path: Path to the CSV file.
+            max_rows: If set, return only the first N data rows.
 
         Returns:
-            Multi-line string suitable for passing to llm_query().
+            List of row dicts.
 
         """
-        filtered = [r for r in records if component in r.get("scope", "")]
-        if not filtered:
-            return f"No records found for component '{component}'."
-        lines: list[str] = [f"=== {component} ({len(filtered)} records) ==="]
-        for r in filtered:
-            dt_str = r["timestamp_dt"].isoformat() if r.get("timestamp_dt") else "?"
-            sev = r.get("severity_text", "INFO")
-            body = r.get("body", "")
-            attrs = r.get("attributes", {})
-            exc = attrs.get("exception.message", "")
-            line = f"[{dt_str}] [{sev}] {body}"
-            if exc:
-                line += f" | exception: {exc}"
-            lines.append(line)
-        return "\n".join(lines)
+        p = Path(path)
+        delimiter = "\t" if p.suffix.lower() == ".tsv" else ","
+        rows: list[dict[str, str]] = []
+        try:
+            with open(p, encoding="utf-8", errors="replace", newline="") as fh:
+                reader = _csv.DictReader(fh, delimiter=delimiter)
+                for i, row in enumerate(reader):
+                    if max_rows is not None and i >= max_rows:
+                        break
+                    rows.append(dict(row))
+        except FileNotFoundError:
+            return [{"error": f"File not found: {path}"}]
+        except OSError as e:
+            return [{"error": str(e)}]
+        return rows
 
     def context_budget() -> dict[str, Any]:
-        """Return current context token budget status."""
+        """
+        Return the current context token budget snapshot.
+
+        Returns:
+            Dict with keys: used_tokens, total_tokens, percent_used, level, tokens_remaining.
+            level is one of: "none", "light", "medium", "aggressive".
+
+        """
         if budget is None:
             return {
                 "used_tokens": 0,
@@ -298,16 +430,17 @@ def build_detector_helpers(traces_path: str, budget: Any = None) -> dict[str, An
                 "level": "none",
                 "tokens_remaining": 0,
             }
-        snap = budget.snapshot()
-        return snap
+        return budget.snapshot()
 
     return {
-        "load_traces": load_traces,
-        "extract_log_records": extract_log_records,
-        "extract_spans": extract_spans,
-        "get_errors": get_errors,
-        "get_component_timeline": get_component_timeline,
-        "search_traces": search_traces,
-        "summarize_component": summarize_component,
+        "list_files": list_files,
+        "read_file": read_file,
+        "read_lines": read_lines,
+        "read_json": read_json,
+        "read_jsonl": read_jsonl,
+        "read_csv": read_csv,
+        "detect_format": detect_format,
+        "extract_archive": extract_archive,
+        "search_lines": search_lines,
         "context_budget": context_budget,
     }

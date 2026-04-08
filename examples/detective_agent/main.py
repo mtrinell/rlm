@@ -1,20 +1,19 @@
 """
-Behavioral Deviation Detector — Root misbehaviour analysis using Recursive Language Models.
+Dataset Analysis Agent — generic investigation using Recursive Language Models.
 
 Architecture:
-  Input validation → DetectorREPL (app_readme + traces injected) → ContextBudget + HistoryManager
-  → RLM loop (budget-aware, phase injection) → results/
+  Input validation → DetectorREPL (dataset_path + optional spec injected)
+  → ContextBudget + HistoryManager → RLM loop (budget-aware, phase injection) → results/
 
 Use case:
-  Given (1) a README / documentation of a multi-agent app, and
-        (2) actual OpenTelemetry traces produced by that app,
-  the agent detects behavioural deviations: derailments, failures, protocol violations, anomalies.
+  Given (1) a dataset — any file, directory, or archive in any format, and
+        (2) optionally a specification / documentation describing expected behaviour,
+  the agent explores the dataset, identifies anomalies, failures, or deviations, and
+  produces a structured ANALYSIS REPORT.
 
-Key differences from the RCA variant:
-  1. No tarball extraction — inputs are plain files (README + OTEL JSONL).
-  2. DetectorREPL injects OTEL helpers (load_traces, extract_log_records, …) + app_readme.
-  3. System prompt targets behavioural compliance, not infrastructure root-cause analysis.
-  4. Investigation produces a BEHAVIORAL COMPLIANCE REPORT instead of an RCA report.
+  The LLM autonomously determines how to read and parse the data using the generic
+  file-access helpers available in the REPL (list_files, read_file, read_json,
+  read_jsonl, read_csv, detect_format, extract_archive, search_lines, …).
 """
 
 import logging
@@ -51,14 +50,14 @@ def _save_results(
     """Write investigation result and summary files. Returns (output_path, summary_path)."""
     content = response
     if not completed:
-        content = f"INCOMPLETE INVESTIGATION — hit MAX_ITERATIONS\n{'=' * 80}\n\n{content}"
+        content = f"INCOMPLETE ANALYSIS — hit MAX_ITERATIONS\n{'=' * 80}\n\n{content}"
 
     output_file = result_dir / f"investigation_{dataset_name}.txt"
     output_file.write_text(content)
 
     summary_file = result_dir / f"SUMMARY_{dataset_name}.txt"
     with open(summary_file, "w") as f:
-        f.write(f"{'=' * 80}\nBEHAVIORAL COMPLIANCE REPORT SUMMARY: {dataset_name}\n{'=' * 80}\n\n")
+        f.write(f"{'=' * 80}\nANALYSIS REPORT SUMMARY: {dataset_name}\n{'=' * 80}\n\n")
         f.write(f"Status: {'COMPLETED' if completed else 'INCOMPLETE (hit MAX_ITERATIONS)'}\n")
         f.write(f"Execution Time: {exec_time:.2f}s\n")
         f.write(f"Iterations Used: {iterations_used}/{max_iterations}\n")
@@ -79,22 +78,22 @@ def _save_results(
 
 
 def main() -> None:
-    """Run a single behavioral deviation detection investigation."""
-    readme_path = settings.resolved_app_readme_path
-    traces_path = settings.resolved_traces_path
+    """Run a single dataset analysis investigation."""
+    dataset_path = settings.resolved_dataset_path
+    spec_path = settings.resolved_spec_path
     result_dir = settings.resolved_log_dir
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset_name = traces_path.stem
+    dataset_name = dataset_path.stem
     log_file = result_dir / f"run_{dataset_name}.log"
     run_logger = setup_logging(log_file)
 
     run_logger.info("=" * 80)
-    run_logger.info("Behavioral Deviation Detector — Multi-Agent App Compliance Check")
+    run_logger.info("Dataset Analysis Agent")
     run_logger.info("=" * 80)
     run_logger.info(
-        f"  README:         {readme_path}\n"
-        f"  Traces:         {traces_path}\n"
+        f"  Dataset:        {dataset_path}\n"
+        f"  Spec:           {spec_path or '(none)'}\n"
         f"  Max Iterations: {settings.max_iterations}\n"
         f"  Context Limit:  {settings.context_token_limit:,} tokens\n"
         f"  Model:          {settings.azure_openai_model}",
@@ -105,18 +104,28 @@ def main() -> None:
         run_logger.info(f"  User Prompt:    {settings.user_prompt[:120]}{'...' if len(settings.user_prompt) > 120 else ''}")
 
     # ── Validate inputs ────────────────────────────────────────────────────────
-    if not readme_path.exists():
-        run_logger.error(f"README not found: {readme_path}")
-        sys.exit(1)
-    if not traces_path.exists():
-        run_logger.error(f"Traces file not found: {traces_path}")
+    if not dataset_path.exists():
+        run_logger.error(f"Dataset not found: {dataset_path}")
         sys.exit(1)
 
     run_logger.info("\n[1/4] Loading inputs...")
-    app_readme = readme_path.read_text(encoding="utf-8", errors="replace")
-    app_name = readme_path.stem  # fallback; llm will extract real name from README
-    run_logger.info(f"  README: {len(app_readme):,} chars")
-    run_logger.info(f"  Traces: {traces_path.stat().st_size / 1024:.1f} KB")
+
+    # Load spec if provided
+    spec = ""
+    if spec_path is not None:
+        if not spec_path.exists():
+            run_logger.error(f"Spec file not found: {spec_path}")
+            sys.exit(1)
+        spec = spec_path.read_text(encoding="utf-8", errors="replace")
+        run_logger.info(f"  Spec:    {len(spec):,} chars from {spec_path.name}")
+    else:
+        run_logger.info("  Spec:    (not provided)")
+
+    if dataset_path.is_dir():
+        file_count = sum(1 for _ in dataset_path.rglob("*") if _.is_file())
+        run_logger.info(f"  Dataset: directory with {file_count} files")
+    else:
+        run_logger.info(f"  Dataset: {dataset_path.stat().st_size / 1024:.1f} KB")
 
     try:
         run_logger.info("\n[2/4] Initialising RLM...")
@@ -134,8 +143,8 @@ def main() -> None:
                 backend_kwargs=settings.backend_kwargs,
                 environment="detector",
                 environment_kwargs={
-                    "traces_path": str(traces_path),
-                    "app_readme": app_readme,
+                    "dataset_path": str(dataset_path),
+                    "spec": spec,
                     "user_prompt": settings.user_prompt,
                     "budget": budget,
                     "inject_helpers": settings.helpers_injection_enabled,
@@ -154,21 +163,23 @@ def main() -> None:
             run_logger.exception(traceback.format_exc())
             sys.exit(1)
 
-        run_logger.info(f"\n[3/4] Running investigation (max {settings.max_iterations} iterations)...")
+        run_logger.info(f"\n[3/4] Running analysis (max {settings.max_iterations} iterations)...")
         run_logger.info("-" * 80)
 
         task_prompt = build_detector_task_prompt(
-            traces_path=str(traces_path),
-            app_name=app_name,
+            dataset_path=str(dataset_path),
+            dataset_name=dataset_name,
             max_iterations=settings.max_iterations,
+            spec_provided=bool(spec),
             user_prompt=settings.user_prompt,
         )
 
         prompt_context: dict = {
-            "traces_path": str(traces_path),
-            "app_readme": app_readme,
+            "dataset_path": str(dataset_path),
             "dataset_name": dataset_name,
         }
+        if spec:
+            prompt_context["spec"] = spec
         if settings.investigation_focus:
             prompt_context["investigation_focus"] = settings.investigation_focus
         if settings.user_prompt:
@@ -177,7 +188,7 @@ def main() -> None:
         try:
             result = rlm.completion(prompt=prompt_context, root_prompt=task_prompt)
         except Exception:
-            run_logger.exception("Investigation failed")
+            run_logger.exception("Analysis failed")
             run_logger.exception(traceback.format_exc())
             sys.exit(1)
         finally:
@@ -216,10 +227,10 @@ def main() -> None:
             )
 
         if not completed:
-            run_logger.warning("Investigation hit MAX_ITERATIONS — results may be incomplete.")
+            run_logger.warning("Analysis hit MAX_ITERATIONS — results may be incomplete.")
 
     finally:
-        pass  # No temp dirs to clean up (unlike the RCA tarball variant)
+        pass  # No temp dirs to clean up (extraction happens inside the REPL if needed)
 
 
 if __name__ == "__main__":

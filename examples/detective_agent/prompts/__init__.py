@@ -1,4 +1,4 @@
-"""Prompts package — RCA and behavioral deviation detection."""
+"""Prompts package — behavioral deviation detection."""
 
 from examples.detective_agent.prompts.detector_system_prompt import (
     DETECTOR_SYSTEM_PROMPT,

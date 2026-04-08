@@ -1,10 +1,11 @@
 """
-DetectorREPL — LocalREPL subclass for behavioral deviation detection.
+DetectorREPL — generic LocalREPL subclass for dataset analysis.
 
 Extends the base REPL with:
-- OTEL trace parsing helpers (load_traces, extract_log_records, extract_spans, …)
-- app_readme and traces_path injected as REPL variables
-- ContextBudget awareness via context_budget() helper
+- Generic file-access helpers (list_files, read_file, read_json, read_jsonl,
+  read_lines, read_csv, detect_format, extract_archive, search_lines, context_budget)
+- dataset_path, spec, and user_prompt injected as REPL variables
+- ContextBudget awareness via the context_budget() helper
 """
 
 from __future__ import annotations
@@ -20,48 +21,53 @@ if TYPE_CHECKING:
 
 class DetectorREPL(LocalREPL):
     """
-    REPL environment pre-loaded with OTEL trace analysis helpers.
+    REPL environment pre-loaded with generic file-access helpers.
 
-    The LLM gets reliable, structured access to traces without needing
-    to write trace-parsing boilerplate from scratch each run.
+    The LLM can freely explore any dataset — a tarball, a folder, a single
+    JSON/YAML/CSV/log file, or any other format — without needing to write
+    low-level I/O boilerplate from scratch.
 
     Additional REPL globals injected at setup:
-        app_readme          — str: full README / documentation of the app under test
-        traces_path         — str: path to OTEL JSONL trace file
-        user_prompt         — str: end-user's original request to the application (empty if not provided)
-        load_traces         — load and parse OTEL JSONL into list of dicts
-        extract_log_records — flatten all log records from loaded traces
-        extract_spans       — flatten all span records from loaded traces
-        get_errors          — filter records to severity >= 17 (ERROR/FATAL)
-        get_component_timeline — group records by scope, sorted by time
-        search_traces       — regex search over record bodies
-        summarize_component — text summary of a component's records for llm_query()
-        context_budget      — check remaining token budget
+
+        dataset_path    — str: path to the dataset (file, folder, or archive)
+        spec            — str: specification / documentation (empty if not provided)
+        user_prompt     — str: the end-user's question or directive (empty if not provided)
+
+        list_files      — list all files in a path (directory, archive, or single file)
+        read_file       — read a file as UTF-8 text (with optional max_bytes cap)
+        read_lines      — read a file as a list of lines
+        read_json       — parse a JSON file
+        read_jsonl      — parse a JSONL file (one JSON object per line)
+        read_csv        — parse a CSV/TSV file into a list of row dicts
+        detect_format   — detect a file's format ("json", "yaml", "csv", "log", "archive", …)
+        extract_archive — extract a tar or zip archive to a directory
+        search_lines    — grep-style line search across a file
+        context_budget  — check remaining token budget
     """
 
     def __init__(
         self,
-        traces_path: str,
-        app_readme: str = "",
+        dataset_path: str,
+        spec: str = "",
         user_prompt: str = "",
         budget: ContextBudget | None = None,
         inject_helpers: bool = True,
         **kwargs: Any,
     ) -> None:
         """
-        Initialize the DetectorREPL.
+        Initialise the DetectorREPL.
 
         Args:
-            traces_path: Path to the OTEL JSONL traces file.
-            app_readme: Full README / documentation content for the app under test.
-            user_prompt: The end-user's original request to the application (empty string if not provided).
+            dataset_path: Path to the dataset (file, folder, or archive).
+            spec: Specification / documentation content (empty string if not provided).
+            user_prompt: The end-user's original question or investigation directive.
             budget: ContextBudget instance for context_budget() REPL helper.
-            inject_helpers: Whether to inject trace helper functions (default True).
+            inject_helpers: Whether to inject file-access helper functions (default True).
             **kwargs: Forwarded to LocalREPL (lm_handler_address, context_payload, etc.)
 
         """
-        self._traces_path = traces_path
-        self._app_readme = app_readme
+        self._dataset_path = dataset_path
+        self._spec = spec
         self._user_prompt = user_prompt
         self._budget = budget
         self._inject_helpers = inject_helpers
@@ -69,19 +75,19 @@ class DetectorREPL(LocalREPL):
         super().__init__(**kwargs)
 
     def setup(self) -> None:
-        """Setup namespace with OTEL helpers and stdlib pre-imports."""
+        """Set up namespace with generic file-access helpers and stdlib pre-imports."""
         super().setup()
 
         if not self._inject_helpers:
             return
 
-        # Inject OTEL trace helpers
-        helpers = build_detector_helpers(self._traces_path, budget=self._budget)
+        # Inject generic file-access helpers
+        helpers = build_detector_helpers(self._dataset_path, budget=self._budget)
         self.globals.update(helpers)
 
         # Pre-import commonly needed stdlib modules
         stdlib_setup = """
-import os, re, json
+import os, re, json, csv, tarfile, zipfile
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from collections import Counter, defaultdict, OrderedDict
@@ -90,12 +96,11 @@ import fnmatch
 """
         self.execute_code(stdlib_setup.strip())
 
-        # Inject traces_path and app_readme as REPL variables
-        self.locals["traces_path"] = self._traces_path
-        self.globals["traces_path"] = self._traces_path
-
-        self.locals["app_readme"] = self._app_readme
-        self.globals["app_readme"] = self._app_readme
-
-        self.locals["user_prompt"] = self._user_prompt
-        self.globals["user_prompt"] = self._user_prompt
+        # Inject dataset_path, spec, and user_prompt as REPL variables
+        for name, value in (
+            ("dataset_path", self._dataset_path),
+            ("spec", self._spec),
+            ("user_prompt", self._user_prompt),
+        ):
+            self.locals[name] = value
+            self.globals[name] = value

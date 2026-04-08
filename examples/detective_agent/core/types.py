@@ -100,11 +100,16 @@ class RLMChatCompletion:
     execution_time: float
 
     def to_dict(self) -> dict[str, Any]:
+        # Sum token counts across all models for visualizer compatibility
+        prompt_tokens = sum(s.total_input_tokens for s in self.usage_summary.model_usage_summaries.values())
+        completion_tokens = sum(s.total_output_tokens for s in self.usage_summary.model_usage_summaries.values())
         return {
             "root_model": self.root_model,
             "prompt": self.prompt,
             "response": self.response,
             "usage_summary": self.usage_summary.to_dict(),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
             "execution_time": self.execution_time,
         }
 
@@ -152,7 +157,6 @@ class REPLResult:
         return {
             "stdout": self.stdout,
             "stderr": self.stderr,
-            "locals": {k: _serialize_value(v) for k, v in self.locals.items()},
             "execution_time": self.execution_time,
             "rlm_calls": [call.to_dict() for call in self.rlm_calls],
         }

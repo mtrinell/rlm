@@ -76,10 +76,16 @@ export function extractContextQuestion(iterations: RLMIteration[]): string {
   // Look for user message that contains the actual question
   for (const msg of prompt) {
     if (msg.role === 'user' && msg.content) {
-      // Try to extract quoted query
+      // Try to extract quoted query (old format)
       const queryMatch = msg.content.match(/original query: "([^"]+)"/);
       if (queryMatch) {
         return queryMatch[1];
+      }
+
+      // Extract task embedded in "Recall the original task: ..." (new detector format)
+      const taskMatch = msg.content.match(/Recall the original task:\s*"([\s\S]+?)"\s*\n/);
+      if (taskMatch) {
+        return taskMatch[1].slice(0, 300) + (taskMatch[1].length > 300 ? '...' : '');
       }
       
       // Check if it contains the actual query pattern
@@ -87,9 +93,9 @@ export function extractContextQuestion(iterations: RLMIteration[]): string {
         continue;
       }
       
-      // Take first substantial user message
-      if (msg.content.length > 50 && msg.content.length < 500) {
-        return msg.content.slice(0, 200) + (msg.content.length > 200 ? '...' : '');
+      // Take first substantial user message (relaxed upper limit)
+      if (msg.content.length > 50 && msg.content.length < 2000) {
+        return msg.content.slice(0, 300) + (msg.content.length > 300 ? '...' : '');
       }
     }
   }
