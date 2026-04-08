@@ -65,8 +65,10 @@ class Settings(BaseSettings):
     spec_path: str = Field(
         default="",
         description=(
-            "Optional path to a specification or documentation file describing the expected "
-            "behaviour of the system under analysis (e.g. a README, API spec, schema, …). "
+            "Optional path to a specification describing the expected behaviour of the system "
+            "under analysis. Can be a single file (README, API spec, schema, OpenAPI YAML, …), "
+            "a directory (e.g. a full project source tree), or an archive (.tar.gz, .zip, …). "
+            "The RLM will explore its contents to infer what the application is meant to do. "
             "Leave empty if no spec is available. "
             "Relative paths are resolved from the detective_agent directory."
         ),

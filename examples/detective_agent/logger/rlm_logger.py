@@ -11,13 +11,15 @@ from examples.detective_agent.core.types import RLMIteration, RLMMetadata
 class RLMLogger:
     """Writes RLMIteration data to a JSON-lines file for analysis and replay."""
 
-    def __init__(self, log_dir: str, file_name: str = "rlm") -> None:
+    def __init__(self, log_dir: str, file_name: str = "rlm", run_stamp: str | None = None) -> None:
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
 
-        timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
-        run_id = str(uuid.uuid4())[:8]
-        self.log_file_path = os.path.join(log_dir, f"{file_name}_{timestamp}_{run_id}.jsonl")
+        if run_stamp is None:
+            timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H-%M-%S")
+            run_stamp = timestamp + "_" + str(uuid.uuid4())[:8]
+        self.run_stamp = run_stamp
+        self.log_file_path = os.path.join(log_dir, f"{file_name}_{run_stamp}.jsonl")
 
         self._iteration_count = 0
         self._metadata_logged = False

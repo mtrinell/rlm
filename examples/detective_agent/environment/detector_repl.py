@@ -4,7 +4,7 @@ DetectorREPL — generic LocalREPL subclass for dataset analysis.
 Extends the base REPL with:
 - Generic file-access helpers (list_files, read_file, read_json, read_jsonl,
   read_lines, read_csv, detect_format, extract_archive, search_lines, context_budget)
-- dataset_path, spec, and user_prompt injected as REPL variables
+- dataset_path, spec_path, and user_prompt injected as REPL variables
 - ContextBudget awareness via the context_budget() helper
 """
 
@@ -30,7 +30,7 @@ class DetectorREPL(LocalREPL):
     Additional REPL globals injected at setup:
 
         dataset_path    — str: path to the dataset (file, folder, or archive)
-        spec            — str: specification / documentation (empty if not provided)
+        spec_path       — str: path to the spec (file, folder, archive, or ""; empty if not provided)
         user_prompt     — str: the end-user's question or directive (empty if not provided)
 
         list_files      — list all files in a path (directory, archive, or single file)
@@ -48,7 +48,7 @@ class DetectorREPL(LocalREPL):
     def __init__(
         self,
         dataset_path: str,
-        spec: str = "",
+        spec_path: str = "",
         user_prompt: str = "",
         budget: ContextBudget | None = None,
         inject_helpers: bool = True,
@@ -59,7 +59,8 @@ class DetectorREPL(LocalREPL):
 
         Args:
             dataset_path: Path to the dataset (file, folder, or archive).
-            spec: Specification / documentation content (empty string if not provided).
+            spec_path: Path to the spec (file, folder, archive, or any project structure).
+                       Empty string if no spec is provided.
             user_prompt: The end-user's original question or investigation directive.
             budget: ContextBudget instance for context_budget() REPL helper.
             inject_helpers: Whether to inject file-access helper functions (default True).
@@ -67,7 +68,7 @@ class DetectorREPL(LocalREPL):
 
         """
         self._dataset_path = dataset_path
-        self._spec = spec
+        self._spec_path = spec_path
         self._user_prompt = user_prompt
         self._budget = budget
         self._inject_helpers = inject_helpers
@@ -96,10 +97,10 @@ import fnmatch
 """
         self.execute_code(stdlib_setup.strip())
 
-        # Inject dataset_path, spec, and user_prompt as REPL variables
+        # Inject dataset_path, spec_path, and user_prompt as REPL variables
         for name, value in (
             ("dataset_path", self._dataset_path),
-            ("spec", self._spec),
+            ("spec_path", self._spec_path),
             ("user_prompt", self._user_prompt),
         ):
             self.locals[name] = value

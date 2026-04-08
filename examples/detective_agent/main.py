@@ -19,6 +19,8 @@ Use case:
 import logging
 import sys
 import traceback
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 def _save_results(
     result_dir: Path,
     dataset_name: str,
+    run_stamp: str,
     response: str,
     completed: bool,
     exec_time: float,
@@ -52,10 +55,10 @@ def _save_results(
     if not completed:
         content = f"INCOMPLETE ANALYSIS — hit MAX_ITERATIONS\n{'=' * 80}\n\n{content}"
 
-    output_file = result_dir / f"investigation_{dataset_name}.txt"
+    output_file = result_dir / f"investigation_{dataset_name}_{run_stamp}.txt"
     output_file.write_text(content)
 
-    summary_file = result_dir / f"SUMMARY_{dataset_name}.txt"
+    summary_file = result_dir / f"SUMMARY_{dataset_name}_{run_stamp}.txt"
     with open(summary_file, "w") as f:
         f.write(f"{'=' * 80}\nANALYSIS REPORT SUMMARY: {dataset_name}\n{'=' * 80}\n\n")
         f.write(f"Status: {'COMPLETED' if completed else 'INCOMPLETE (hit MAX_ITERATIONS)'}\n")
@@ -85,7 +88,8 @@ def main() -> None:
     result_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_name = dataset_path.stem
-    log_file = result_dir / f"run_{dataset_name}.log"
+    run_stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_" + str(uuid.uuid4())[:8]
+    log_file = result_dir / f"run_{dataset_name}_{run_stamp}.log"
     run_logger = setup_logging(log_file)
 
     run_logger.info("=" * 80)
@@ -110,14 +114,16 @@ def main() -> None:
 
     run_logger.info("\n[1/4] Loading inputs...")
 
-    # Load spec if provided
-    spec = ""
+    # Validate spec path if provided
     if spec_path is not None:
         if not spec_path.exists():
-            run_logger.error(f"Spec file not found: {spec_path}")
+            run_logger.error(f"Spec path not found: {spec_path}")
             sys.exit(1)
-        spec = spec_path.read_text(encoding="utf-8", errors="replace")
-        run_logger.info(f"  Spec:    {len(spec):,} chars from {spec_path.name}")
+        if spec_path.is_dir():
+            file_count = sum(1 for _ in spec_path.rglob("*") if _.is_file())
+            run_logger.info(f"  Spec:    directory with {file_count} files at {spec_path}")
+        else:
+            run_logger.info(f"  Spec:    {spec_path.stat().st_size / 1024:.1f} KB from {spec_path.name}")
     else:
         run_logger.info("  Spec:    (not provided)")
 
@@ -135,7 +141,7 @@ def main() -> None:
 
         rlm_logger = None
         if RLMLogger is not None:
-            rlm_logger = RLMLogger(log_dir=str(result_dir))
+            rlm_logger = RLMLogger(log_dir=str(result_dir), run_stamp=run_stamp)
 
         try:
             rlm = RLM(
@@ -144,7 +150,7 @@ def main() -> None:
                 environment="detector",
                 environment_kwargs={
                     "dataset_path": str(dataset_path),
-                    "spec": spec,
+                    "spec_path": str(spec_path) if spec_path is not None else "",
                     "user_prompt": settings.user_prompt,
                     "budget": budget,
                     "inject_helpers": settings.helpers_injection_enabled,
@@ -170,7 +176,7 @@ def main() -> None:
             dataset_path=str(dataset_path),
             dataset_name=dataset_name,
             max_iterations=settings.max_iterations,
-            spec_provided=bool(spec),
+            spec_path=str(spec_path) if spec_path is not None else "",
             user_prompt=settings.user_prompt,
         )
 
@@ -178,8 +184,8 @@ def main() -> None:
             "dataset_path": str(dataset_path),
             "dataset_name": dataset_name,
         }
-        if spec:
-            prompt_context["spec"] = spec
+        if spec_path:
+            prompt_context["spec_path"] = str(spec_path)
         if settings.investigation_focus:
             prompt_context["investigation_focus"] = settings.investigation_focus
         if settings.user_prompt:
@@ -205,6 +211,7 @@ def main() -> None:
         output_file, summary_file = _save_results(
             result_dir=result_dir,
             dataset_name=dataset_name,
+            run_stamp=run_stamp,
             response=result.response,
             completed=completed,
             exec_time=result.execution_time,

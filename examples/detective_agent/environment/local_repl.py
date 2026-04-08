@@ -16,6 +16,8 @@ import threading
 import time
 import types
 import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, suppress
 from typing import Any
 
@@ -154,11 +156,14 @@ class LocalREPL(NonIsolatedEnv):
         setup_code: str | None = None,
         persistent: bool = False,
         depth: int = 1,
+        subcall_fn: Callable[[str, str | None], "RLMChatCompletion"] | None = None,
+        max_concurrent_subcalls: int = 4,
         **kwargs: Any,
     ) -> None:
-        super().__init__(persistent=persistent, depth=depth, **kwargs)
+        super().__init__(persistent=persistent, depth=depth, max_concurrent_subcalls=max_concurrent_subcalls, **kwargs)
 
         self.lm_handler_address = lm_handler_address
+        self.subcall_fn = subcall_fn
         self.original_cwd = os.getcwd()
         self.temp_dir = tempfile.mkdtemp(prefix=f"repl_env_{uuid.uuid4()}_")
         self._lock = threading.Lock()
@@ -186,6 +191,8 @@ class LocalREPL(NonIsolatedEnv):
         self.globals["SHOW_VARS"] = self._show_vars
         self.globals["llm_query"] = self._llm_query
         self.globals["llm_query_batched"] = self._llm_query_batched
+        self.globals["rlm_query"] = self._rlm_query
+        self.globals["rlm_query_batched"] = self._rlm_query_batched
 
     def _final_var(self, variable_name: str) -> str:
         variable_name = variable_name.strip().strip("\"'")
@@ -242,6 +249,71 @@ class LocalREPL(NonIsolatedEnv):
             return results
         except Exception as e:
             return [f"Error: LM query failed - {e}"] * len(prompts)
+
+    def _rlm_query(self, prompt: str, model: str | None = None) -> str:
+        """Spawn a recursive RLM sub-call; falls back to llm_query when subcall_fn is absent."""
+        if self.subcall_fn is not None:
+            try:
+                completion = self.subcall_fn(prompt, model)
+                self._pending_llm_calls.append(completion)
+                return completion.response
+            except Exception as e:
+                return f"Error: RLM query failed - {e}"
+        return self._llm_query(prompt, model)
+
+    def _rlm_query_batched(self, prompts: list[str], model: str | None = None) -> list[str]:
+        """Spawn recursive RLM sub-calls in parallel; falls back to llm_query_batched."""
+        if self.subcall_fn is not None:
+            if len(prompts) <= 1:
+                results = []
+                for p in prompts:
+                    try:
+                        completion = self.subcall_fn(p, model)
+                        self._pending_llm_calls.append(completion)
+                        results.append(completion.response)
+                    except Exception as e:
+                        results.append(f"Error: RLM query failed - {e}")
+                return results
+
+            max_workers = min(self.max_concurrent_subcalls, len(prompts))
+            results: list[str] = [""] * len(prompts)
+            completions: list[tuple[int, RLMChatCompletion]] = []
+            lock = threading.Lock()
+
+            def _run(index: int, prompt: str) -> None:
+                try:
+                    completion = self.subcall_fn(prompt, model)
+                    with lock:
+                        completions.append((index, completion))
+                    results[index] = completion.response
+                except Exception as e:
+                    results[index] = f"Error: RLM query failed - {e}"
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_run, i, p) for i, p in enumerate(prompts)]
+                for future in as_completed(futures):
+                    future.result()
+
+            completions.sort(key=lambda x: x[0])
+            for _, completion in completions:
+                self._pending_llm_calls.append(completion)
+
+            return results
+
+        return self._llm_query_batched(prompts, model)
+
+    def _restore_scaffold(self) -> None:
+        """Re-attach built-in helpers after each execution so model overwrites don't persist."""
+        self.globals["llm_query"] = self._llm_query
+        self.globals["llm_query_batched"] = self._llm_query_batched
+        self.globals["rlm_query"] = self._rlm_query
+        self.globals["rlm_query_batched"] = self._rlm_query_batched
+        self.globals["FINAL_VAR"] = self._final_var
+        self.globals["SHOW_VARS"] = self._show_vars
+        if "context_0" in self.locals:
+            self.locals["context"] = self.locals["context_0"]
+        if "history_0" in self.locals:
+            self.locals["history"] = self.locals["history_0"]
 
     def load_context(self, context_payload: dict | list | str) -> None:
         """Load context into the environment as context_0 (and 'context' alias)."""
@@ -417,6 +489,8 @@ class LocalREPL(NonIsolatedEnv):
                 fv = combined.get("FINAL_VAR")
                 if fv is not None and isinstance(fv, str):
                     self.locals["FINAL_VAR"] = fv
+
+                self._restore_scaffold()
 
                 stdout = stdout_buf.getvalue()
                 stderr = stderr_buf.getvalue()

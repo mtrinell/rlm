@@ -9,9 +9,12 @@ from examples.detective_agent.core.types import REPLResult
 class BaseEnv(ABC):
     """Abstract base REPL-like environment."""
 
-    def __init__(self, persistent: bool = False, depth: int = 1, **kwargs: Any) -> None:
+    def __init__(
+        self, persistent: bool = False, depth: int = 1, max_concurrent_subcalls: int = 4, **kwargs: Any
+    ) -> None:
         self.persistent = persistent
         self.depth = depth
+        self.max_concurrent_subcalls = max_concurrent_subcalls
         self.kwargs = kwargs
 
     @abstractmethod
