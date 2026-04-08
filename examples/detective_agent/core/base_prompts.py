@@ -70,8 +70,7 @@ def build_user_prompt(
     """Build the per-iteration user message."""
     if iteration == 0:
         safeguard = (
-            " You haven't accessed the REPL yet. Start by inspecting file_manifest "
-            "to see what files are available, then build your investigation plan."
+            " You haven't accessed the REPL yet. Build a plan to answer the user"
         )
     else:
         safeguard = " The history above is your previous interactions."
