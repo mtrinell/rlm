@@ -129,9 +129,9 @@ def main() -> None:
 
     if dataset_path.is_dir():
         file_count = sum(1 for _ in dataset_path.rglob("*") if _.is_file())
-        run_logger.info(f"  Dataset: directory with {file_count} files")
+        run_logger.info(f"  Dataset: directory with {file_count} files from {dataset_path}")
     else:
-        run_logger.info(f"  Dataset: {dataset_path.stat().st_size / 1024:.1f} KB")
+        run_logger.info(f"  Dataset: {dataset_path.stat().st_size / 1024:.1f} KB from {dataset_path}")
 
     try:
         run_logger.info("\n[2/4] Initialising RLM...")
