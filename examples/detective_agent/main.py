@@ -1,22 +1,29 @@
 """
-Dataset Analysis Agent — generic investigation using Recursive Language Models.
+Detective Agent — behavioral derailment detection using Recursive Language Models.
 
 Architecture:
   Input validation → DetectorREPL (dataset_path + optional spec injected)
   → ContextBudget + HistoryManager → RLM loop (budget-aware, phase injection) → results/
 
 Use case:
-  Given (1) a dataset — any file, directory, or archive in any format, and
+  Given (1) a dataset — any file, directory, or archive in any format (logs, traces,
+        events, CSVs, JSON, YAML, …), and
         (2) optionally a specification / documentation describing expected behaviour,
-  the agent explores the dataset, identifies anomalies, failures, or deviations, and
-  produces a structured ANALYSIS REPORT.
+  the agent hunts for behavioral derailments: cases where an agent or component acted
+  outside its mandate — accessing resources it was not asked to access, acting on behalf
+  of the wrong entity, or leaking data across request boundaries.
 
-  The LLM autonomously determines how to read and parse the data using the generic
-  file-access helpers available in the REPL (list_files, read_file, read_json,
-  read_jsonl, read_csv, detect_format, extract_archive, search_lines, …).
+  The LLM autonomously explores the dataset, builds a request→action map, and batch-
+  analyses traces to produce a structured BEHAVIORAL DERAILMENT REPORT with per-finding
+  classifications (DERAILMENT / DERAILMENT_USER / OK) and an overall verdict
+  (DERAILED / DERAILED_USER / COMPLIANT).
+
+  File-access helpers available in the REPL: list_files, read_file, read_json,
+  read_jsonl, read_csv, detect_format, extract_archive, search_lines, …
 """
 
 import logging
+import os
 import sys
 import traceback
 import uuid
@@ -97,10 +104,9 @@ def main() -> None:
     run_logger.info("=" * 80)
     run_logger.info(
         f"  Dataset:        {dataset_path}\n"
-        f"  Spec:           {spec_path or '(none)'}\n"
+        f"  Spec:           {spec_path}\n"
         f"  Max Iterations: {settings.max_iterations}\n"
         f"  Context Limit:  {settings.context_token_limit:,} tokens\n"
-        f"  Model:          {settings.azure_openai_model}",
     )
     if settings.investigation_focus:
         run_logger.info(f"  Focus:          {settings.investigation_focus}")
@@ -114,18 +120,14 @@ def main() -> None:
 
     run_logger.info("\n[1/4] Loading inputs...")
 
-    # Validate spec path if provided
-    if spec_path is not None:
-        if not spec_path.exists():
-            run_logger.error(f"Spec path not found: {spec_path}")
-            sys.exit(1)
-        if spec_path.is_dir():
-            file_count = sum(1 for _ in spec_path.rglob("*") if _.is_file())
-            run_logger.info(f"  Spec:    directory with {file_count} files at {spec_path}")
-        else:
-            run_logger.info(f"  Spec:    {spec_path.stat().st_size / 1024:.1f} KB from {spec_path.name}")
+    if not spec_path.exists():
+        run_logger.error(f"Spec path not found: {spec_path}")
+        sys.exit(1)
+    if spec_path.is_dir():
+        file_count = sum(1 for _ in spec_path.rglob("*") if _.is_file())
+        run_logger.info(f"  Spec:    directory with {file_count} files at {spec_path}")
     else:
-        run_logger.info("  Spec:    (not provided)")
+        run_logger.info(f"  Spec:    {spec_path.stat().st_size / 1024:.1f} KB from {spec_path.name}")
 
     if dataset_path.is_dir():
         file_count = sum(1 for _ in dataset_path.rglob("*") if _.is_file())
@@ -145,12 +147,12 @@ def main() -> None:
 
         try:
             rlm = RLM(
-                backend="azure_openai",
-                backend_kwargs=settings.backend_kwargs,
+                backend="openai",
+                backend_kwargs={"model_name": os.getenv("LLM_MODEL")},
                 environment="detector",
                 environment_kwargs={
                     "dataset_path": str(dataset_path),
-                    "spec_path": str(spec_path) if spec_path is not None else "",
+                    "spec_path": str(spec_path),
                     "user_prompt": settings.user_prompt,
                     "budget": budget,
                     "inject_helpers": settings.helpers_injection_enabled,
@@ -176,16 +178,15 @@ def main() -> None:
             dataset_path=str(dataset_path),
             dataset_name=dataset_name,
             max_iterations=settings.max_iterations,
-            spec_path=str(spec_path) if spec_path is not None else "",
+            spec_path=str(spec_path),
             user_prompt=settings.user_prompt,
         )
 
         prompt_context: dict = {
             "dataset_path": str(dataset_path),
             "dataset_name": dataset_name,
+            "spec_path": str(spec_path),
         }
-        if spec_path:
-            prompt_context["spec_path"] = str(spec_path)
         if settings.investigation_focus:
             prompt_context["investigation_focus"] = settings.investigation_focus
         if settings.user_prompt:

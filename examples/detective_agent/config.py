@@ -2,24 +2,15 @@
 
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 class Settings(BaseSettings):
     """Application settings with validation."""
-
-    # ── Azure OpenAI ──────────────────────────────────────────────────────────
-    azure_openai_api_key: str = Field(..., description="Azure OpenAI API Key")
-    azure_openai_endpoint: str = Field(..., description="Azure OpenAI Endpoint URL")
-    azure_openai_api_version: str = Field(
-        default="2024-02-15-preview",
-        description="Azure OpenAI API Version",
-    )
-    azure_openai_model: str = Field(
-        default="gpt-4o",
-        description="Model deployment name (e.g., gpt-4o, gpt-4o-mini)",
-    )
 
     # ── RLM Execution ─────────────────────────────────────────────────────────
     max_iterations: int = Field(
@@ -63,16 +54,23 @@ class Settings(BaseSettings):
         ),
     )
     spec_path: str = Field(
-        default="",
         description=(
-            "Optional path to a specification describing the expected behaviour of the system "
-            "under analysis. Can be a single file (README, API spec, schema, OpenAPI YAML, …), "
+            "Path to a specification describing the expected behaviour of the system under analysis. "
+            "Can be a single file (README, API spec, schema, OpenAPI YAML, …), "
             "a directory (e.g. a full project source tree), or an archive (.tar.gz, .zip, …). "
             "The RLM will explore its contents to infer what the application is meant to do. "
-            "Leave empty if no spec is available. "
             "Relative paths are resolved from the detective_agent directory."
         ),
     )
+
+    @field_validator("spec_path")
+    @classmethod
+    def spec_path_required(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "SPEC_PATH is required — provide a path to a specification file, directory, or archive."
+            )
+        return v
     investigation_focus: str = Field(
         default="",
         description=(
@@ -106,29 +104,6 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ── Validators ────────────────────────────────────────────────────────────
-
-    @field_validator("azure_openai_api_key")
-    @classmethod
-    def validate_api_key(cls, v: str) -> str:
-        if not v or v == "your-api-key-here":
-            raise ValueError(
-                "AZURE_OPENAI_API_KEY is not set or is using a placeholder value. "
-                "Please update your .env file with a valid API key.",
-            )
-        return v
-
-    @field_validator("azure_openai_endpoint")
-    @classmethod
-    def validate_endpoint(cls, v: str) -> str:
-        if not v:
-            raise ValueError("AZURE_OPENAI_ENDPOINT is required")
-        if not v.startswith("https://"):
-            raise ValueError(f"AZURE_OPENAI_ENDPOINT must start with https://, got: {v}")
-        if not v.endswith("/"):
-            v = v + "/"
-        return v
-
     # ── Properties ────────────────────────────────────────────────────────────
 
     @property
@@ -149,22 +124,10 @@ class Settings(BaseSettings):
         return p if p.is_absolute() else (Path(__file__).parent / p).resolve()
 
     @property
-    def resolved_spec_path(self) -> Path | None:
-        """Absolute path to the spec/documentation file, or None if not configured."""
-        if not self.spec_path:
-            return None
+    def resolved_spec_path(self) -> Path:
+        """Absolute path to the spec/documentation file or directory."""
         p = Path(self.spec_path)
         return p if p.is_absolute() else (Path(__file__).parent / p).resolve()
-
-    @property
-    def backend_kwargs(self) -> dict:
-        """Convenience property: Azure OpenAI client kwargs dict."""
-        return {
-            "api_key": self.azure_openai_api_key,
-            "azure_endpoint": self.azure_openai_endpoint,
-            "api_version": self.azure_openai_api_version,
-            "model_name": self.azure_openai_model,
-        }
 
 
 # Global settings instance — imported by main.py and tests

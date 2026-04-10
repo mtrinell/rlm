@@ -1,116 +1,67 @@
 # Detective Agent
 
-Investigation engine using Recursive Language Models (RLMs). A single LM self-programs its investigation strategy through code execution in a REPL environment.
+An RLM-powered behavioral derailment detector. Given a dataset of agent traces (file, directory, or archive) and an optional specification, it hunts for cases where an agent or component acted outside its mandate — accessing out-of-scope resources, acting on behalf of the wrong entity, or leaking data across request boundaries — and produces a structured **BEHAVIORAL DERAILMENT REPORT**.
 
-## Use Cases
+## Getting started
 
-### 1. Behavioral Deviation Detection (default)
+### 1. Install dependencies
 
-Given the README/documentation of a multi-agent application and its actual OpenTelemetry traces, the agent detects whether the app is behaving as documented — flagging derailments, failures, protocol violations, and anomalies.
-
-**Inputs:**
-- `APP_README_PATH` — README or documentation of the app under test
-- `TRACES_PATH` — OpenTelemetry JSONL traces from a live run
-
-**Output:** A `BEHAVIORAL COMPLIANCE REPORT` with per-component findings classified as `DERAILED / DEGRADED / ANOMALOUS / HEALTHY`.
-
-**Example dataset:** `examples/banking_app/` — SentinelBank AI, a multi-agent banking system.
-
-### 2. Root Cause Analysis
-
-Given a tarball of infrastructure logs (network, Kubernetes, syslog, etc.) and a problem statement, the agent identifies the root cause of an incident.
-
-**Inputs:**
-- `TEST_DATASET` — path to a `.tar` / `.tar.gz` log archive
-- `PROBLEM_STATEMENT` — description of the observed failure
-
-**Output:** A `ROOT CAUSE ANALYSIS REPORT` with evidence, causal chain, and confidence rating.
-
-## Running
+From the project root:
 
 ```bash
-# From the detective_agent directory
-uv run python -m examples.detective_agent.main
-
-# With environment variable overrides
-APP_README_PATH=examples/banking_app/README.md \
-TRACES_PATH=examples/banking_app/otel-traces.jsonl \
-uv run python -m examples.detective_agent.main
+uv pip install -e .
 ```
 
-## Configuration
+### 2. Configure environment
 
-Settings are read from `examples/detective_agent/.env` via Pydantic Settings (`config.py`).
+Copy the example env file and fill in your values:
 
-### Required
+```bash
+cp examples/detective_agent/.env.example examples/detective_agent/.env
+```
+
+Minimum required variables:
 
 | Variable | Description |
-|----------|-------------|
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
+|---|---|
+| `LLM_API_KEY` | API key for your LLM provider |
+| `LLM_MODEL` | Model identifier (e.g. `openai/gpt-5.4`) |
+| `DATASET_PATH` | Path to the dataset to analyse |
+| `SPEC_PATH` | Path to source code or docs describing the system's expected behaviour |
 
-### Optional (with defaults)
+Optional:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AZURE_OPENAI_API_VERSION` | `2024-02-15-preview` | API version |
-| `AZURE_OPENAI_MODEL` | `gpt-4o` | Model deployment name |
-| `MAX_ITERATIONS` | `20` | Top-level LLM iteration limit |
-| `MAX_DEPTH` | `1` | Recursive sub-call depth (`1` = single model) |
-| `CONTEXT_TOKEN_LIMIT` | `100000` | Token budget ceiling; truncation tiers at 50/70/85% |
-| `APP_README_PATH` | `examples/banking_app/README.md` | Path to app documentation |
-| `TRACES_PATH` | `examples/banking_app/otel-traces.jsonl` | Path to OTEL JSONL traces |
-| `INVESTIGATION_FOCUS` | *(empty)* | Optional hint (e.g. `"focus on the security agent"`) |
-| `LOG_DIR` | `results` | Output directory for logs and result files |
-| `VERBOSE` | `true` | Enable rich console output |
+| Variable | Description |
+|---|---|
+| `LLM_BASE_URL` | Custom base URL (e.g. a proxy) |
+| `USER_PROMPT` | The original input that was given to the agent under test (e.g. `"Create a new GitHub project 'Agent-auditor'…"`). The detective uses this to verify that the agent did exactly what was asked — no more, no less — and files `DERAILMENT_USER` findings for anything it did that wasn't covered by this request. |
+| `MAX_ITERATIONS` | Max RLM iterations (default: `20`) |
+| `CONTEXT_TOKEN_LIMIT` | Token budget (default: `200000`) |
+| `LOG_DIR` | Output directory (default: `results/`) |
 
-## Project Structure
+### 3. Run
 
-```
-detective_agent/
-├── main.py              # Entry point (behavioral deviation detection)
-├── config.py            # Pydantic Settings configuration
-├── preprocessor.py      # Tarball extraction and file manifest (RCA use case)
-├── log_utils.py         # Log setup
-├── clients/             # LLM clients (Azure OpenAI, Anthropic, LiteLLM, OpenAI)
-├── core/                # RLM loop, LM handler, parsing, types
-├── context/             # Context management
-│   ├── budget.py        # ContextBudget — 4-tier token truncation
-│   └── history_manager.py
-├── environment/         # REPL environments
-│   ├── local_repl.py    # Base local REPL
-│   ├── detector_repl.py # DetectorREPL — OTEL trace helpers injected
-│   ├── detector_helpers.py  # load_traces, extract_log_records, get_errors, …
-│   ├── rca_repl.py      # RcaREPL — filesystem helpers injected
-│   └── helpers.py       # Filesystem helpers (read_file_safe, grep, …)
-├── logger/              # Iteration logger (JSONL + rich console)
-├── prompts/
-│   ├── detector_system_prompt.py  # Behavioral deviation detection prompt
-│   └── system_prompt.py           # RCA prompt
-└── examples/
-    └── banking_app/     # SentinelBank AI example dataset
-        ├── README.md
-        └── otel-traces.jsonl
+```bash
+uv run python -m examples.detective_agent.main
 ```
 
-## How It Works
+Results are written to `results/` (or the directory set by `LOG_DIR`):
+- `investigation_<dataset>_<timestamp>.txt` — full derailment report
+- `SUMMARY_<dataset>_<timestamp>.txt` — summary with token usage and cost estimate
+- `run_<dataset>_<timestamp>.log` — execution log
 
-1. **Input loading** — The app README and OTEL traces file are resolved from config and read into memory. No extraction step needed.
-2. **RLM initialization** — A `DetectorREPL` environment is created with OTEL helpers (`load_traces`, `extract_log_records`, `get_errors`, `get_component_timeline`, `summarize_component`, …) and `app_readme` injected into the REPL namespace. `ContextBudget` tracks token usage with 4-tier truncation.
-3. **Investigation loop** — The LM extracts the expected spec from the README, loads and triages traces, cross-references actual vs. documented behaviour per component, and builds a compliance verdict. Phase-injection inserts budget-pressure reminders at key milestones.
-4. **Output** — The compliance report and a cost/iteration summary are written to `results/`.
+## How it works
 
-## Troubleshooting
+The agent runs a 3-phase RLM loop:
 
-| Error | Fix |
-|-------|-----|
-| `README not found` | Check `APP_README_PATH` in `.env` |
-| `Traces file not found` | Check `TRACES_PATH` in `.env` |
-| `AZURE_OPENAI_API_KEY not set` | Set `AZURE_OPENAI_API_KEY` in `.env` |
-| Investigation terminates early | Increase `MAX_ITERATIONS` in `.env` |
-| `ModuleNotFoundError` | Run `uv sync` in the `detective_agent` directory |
+1. **Phase 0 — Spec ingestion**: reads key files from the spec and synthesises a mandate reference for each component.
+2. **Phase 1 — Setup**: explores the dataset, detects formats, extracts archives, and builds a `request→action` map (what was asked vs. what was actually done).
+3. **Phase 2 — Derailment scan**: batch-analyses traces with `llm_query_batched`, flagging every action that accessed a resource or entity not justified by the request.
 
-## References
+Findings are classified as **DERAILMENT**, **DERAILMENT_USER**, or **OK**, with an overall verdict of **DERAILED**, **DERAILED_USER**, or **COMPLIANT**.
 
-- [RLM Paper](https://arxiv.org/abs/2512.24601)
-- [RLM Framework](https://github.com/alexzhang13/rlm)
+## Supported dataset formats
+
+Files, directories, or archives (`.zip`, `.tar.gz`) containing agent traces in:
+JSON, JSONL, CSV, YAML, plain text / log files, and more.
+The agent auto-detects the format and picks the appropriate reader.

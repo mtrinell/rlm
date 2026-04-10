@@ -23,12 +23,11 @@ class OpenAIClient(BaseLM):
         super().__init__(model_name=model_name, **kwargs)
 
         if api_key is None:
-            if base_url == "https://openrouter.ai/api/v1":
-                api_key = os.getenv("OPENROUTER_API_KEY")
-            elif base_url == "https://ai-gateway.vercel.sh/v1":
-                api_key = os.getenv("AI_GATEWAY_API_KEY")
-            else:
-                api_key = os.getenv("OPENAI_API_KEY")
+            api_key = os.getenv("LLM_API_KEY")
+        if base_url is None:
+            base_url = os.getenv("LLM_BASE_URL")
+        if model_name is None:
+            model_name = os.getenv("LLM_MODEL")
 
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
         self.async_client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
