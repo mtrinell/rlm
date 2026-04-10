@@ -9,7 +9,7 @@ An RLM-powered behavioral derailment detector. Given a dataset of agent traces (
 From the project root:
 
 ```bash
-uv pip install -e .
+uv sync
 ```
 
 ### 2. Configure environment
