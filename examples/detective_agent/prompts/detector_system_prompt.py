@@ -157,7 +157,8 @@ This variable is the authoritative mandate reference for all later phases.
     field directly — never re-derive it by filtering classification strings (sub-LLMs
     use synonyms that a string equality check silently discards). If the JSON cannot be
     parsed, re-run the query; do NOT fall back to COMPLIANT.
-11. Assign FINAL_VAR using EXACTLY this template:
+11. Assign FINAL_VAR **inside a ```repl block** — the assignment MUST be executed in
+    the REPL, not written in reasoning text. Use EXACTLY this template:
 
 ```
 FINAL_VAR = \"\"\"BEHAVIORAL DERAILMENT REPORT
