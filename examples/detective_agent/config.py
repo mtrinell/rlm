@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # ── Context Management ────────────────────────────────────────────────────
     context_token_limit: int = Field(
-        default=100_000,
+        default=200_000,
         description=(
             "Token budget ceiling for progressive context truncation. "
             "Truncation tiers activate at 50/70/85% of this value."
@@ -164,7 +164,6 @@ class Settings(BaseSettings):
             "azure_endpoint": self.azure_openai_endpoint,
             "api_version": self.azure_openai_api_version,
             "model_name": self.azure_openai_model,
-            "temperature": 0.0,
         }
 
 
